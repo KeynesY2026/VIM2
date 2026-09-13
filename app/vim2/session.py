@@ -14,6 +14,7 @@ from vim2.transcript import (
 
 TAIL_OVERLAP_SECONDS = 8
 MAX_TAIL_RATIO = 0.70
+RECOGNITION_ERRORS = (OSError, RuntimeError, ValueError, MemoryError)
 
 
 class Recorder(Protocol):
@@ -129,7 +130,7 @@ class VoiceSession:
                 self._model_id,
                 allow_tail=allow_tail,
             )
-        except (OSError, RuntimeError, ValueError, MemoryError) as exc:
+        except RECOGNITION_ERRORS as exc:
             self._machine.transition_to(AppState.RETRY_PENDING)
             raise FinalRecognitionError(str(exc)) from exc
 
@@ -166,6 +167,8 @@ class VoiceSession:
         try:
             text = self._recognizer.transcribe(tail.path, model_id).strip()
             return merge_stable_tail(checkpoint, text)
+        except RECOGNITION_ERRORS:
+            return None
         finally:
             self._recorder.discard(tail)
 

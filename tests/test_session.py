@@ -289,6 +289,149 @@ def test_unusable_tail_falls_back_to_complete_recording(
     assert not artifact.path.exists()
 
 
+def test_tail_recognition_error_falls_back_to_complete_recording(
+    tmp_path: Path,
+) -> None:
+    artifact = _long_artifact(tmp_path)
+    recorder = FakeRecorder(artifact)
+    recorder.snapshots = [
+        AudioArtifact(tmp_path / "seed.wav", 640_000, 16_000)
+    ]
+    recognizer = FakeRecognizer(
+        [
+            "第一句。未完成",
+            "第一句。变化",
+            "第一句。继续",
+            RuntimeError("tail failed"),
+            "第一句。完整尾段。",
+        ]
+    )
+    paster = FakePaster()
+    session = VoiceSession(_ready_machine(), recorder, recognizer, paster)
+    session.start(target_window=7, model_id=ModelId.FAST)
+    session.preview()
+    session.preview()
+    session.preview()
+
+    result = session.stop()
+
+    tail = recorder.slices[0][2]
+    assert result == "第一句。完整尾段。"
+    assert recognizer.calls[-2:] == [
+        (tail.path, ModelId.FAST),
+        (artifact.path, ModelId.FAST),
+    ]
+    assert paster.calls == [("第一句。完整尾段。", 7)]
+    assert not tail.path.exists()
+    assert not artifact.path.exists()
+
+
+def test_failed_tail_and_full_recognition_retries_complete_recording(
+    tmp_path: Path,
+) -> None:
+    artifact = _long_artifact(tmp_path)
+    recorder = FakeRecorder(artifact)
+    recorder.snapshots = [
+        AudioArtifact(tmp_path / "seed.wav", 640_000, 16_000)
+    ]
+    recognizer = FakeRecognizer(
+        [
+            "第一句。未完成",
+            "第一句。变化",
+            "第一句。继续",
+            RuntimeError("tail failed"),
+            RuntimeError("full failed"),
+            "第一句。重试成功。",
+        ]
+    )
+    paster = FakePaster()
+    session = VoiceSession(_ready_machine(), recorder, recognizer, paster)
+    session.start(target_window=7, model_id=ModelId.FAST)
+    for _ in range(3):
+        session.preview()
+
+    with pytest.raises(FinalRecognitionError, match="full failed"):
+        session.stop()
+
+    tail = recorder.slices[0][2]
+    assert not tail.path.exists()
+    assert artifact.path.exists()
+    assert session.state is AppState.RETRY_PENDING
+
+    assert session.retry() == "第一句。重试成功。"
+    assert recognizer.calls[-1] == (artifact.path, ModelId.FAST)
+    assert paster.calls == [("第一句。重试成功。", 7)]
+    assert not artifact.path.exists()
+    assert session.state is AppState.READY
+
+
+def test_cancel_after_optimized_finalization_failure_cleans_audio(
+    tmp_path: Path,
+) -> None:
+    artifact = _long_artifact(tmp_path)
+    recorder = FakeRecorder(artifact)
+    recorder.snapshots = [
+        AudioArtifact(tmp_path / "seed.wav", 640_000, 16_000)
+    ]
+    recognizer = FakeRecognizer(
+        [
+            "第一句。未完成",
+            "第一句。变化",
+            "第一句。继续",
+            RuntimeError("tail failed"),
+            RuntimeError("full failed"),
+        ]
+    )
+    session = VoiceSession(
+        _ready_machine(), recorder, recognizer, FakePaster()
+    )
+    session.start(target_window=7, model_id=ModelId.FAST)
+    for _ in range(3):
+        session.preview()
+    with pytest.raises(FinalRecognitionError, match="full failed"):
+        session.stop()
+
+    tail = recorder.slices[0][2]
+    session.cancel()
+
+    assert not tail.path.exists()
+    assert not artifact.path.exists()
+    assert session.state is AppState.READY
+
+
+def test_shutdown_after_optimized_finalization_failure_cleans_audio(
+    tmp_path: Path,
+) -> None:
+    artifact = _long_artifact(tmp_path)
+    recorder = FakeRecorder(artifact)
+    recorder.snapshots = [
+        AudioArtifact(tmp_path / "seed.wav", 640_000, 16_000)
+    ]
+    recognizer = FakeRecognizer(
+        [
+            "第一句。未完成",
+            "第一句。变化",
+            "第一句。继续",
+            RuntimeError("tail failed"),
+            RuntimeError("full failed"),
+        ]
+    )
+    session = VoiceSession(
+        _ready_machine(), recorder, recognizer, FakePaster()
+    )
+    session.start(target_window=7, model_id=ModelId.FAST)
+    for _ in range(3):
+        session.preview()
+    with pytest.raises(FinalRecognitionError, match="full failed"):
+        session.stop()
+
+    tail = recorder.slices[0][2]
+    session.shutdown()
+
+    assert not tail.path.exists()
+    assert not artifact.path.exists()
+
+
 def test_tail_over_ratio_limit_uses_complete_recording(
     tmp_path: Path,
 ) -> None:
