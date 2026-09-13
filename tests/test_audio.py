@@ -1,8 +1,10 @@
+import wave
 from pathlib import Path
 
 import numpy as np
+import pytest
 
-from vim2.audio import AudioRecorder
+from vim2.audio import AudioArtifact, AudioRecorder
 
 
 class FakeInputStream:
@@ -122,3 +124,47 @@ def test_snapshot_does_not_hold_capture_lock_during_audio_concatenation(
 
     recorder.discard(snapshot)
     recorder.cancel()
+
+
+def test_slice_from_writes_requested_wav_suffix(tmp_path: Path) -> None:
+    backend = FakeSoundDevice()
+    recorder = AudioRecorder(tmp_path, sounddevice=backend, sample_rate=4)
+    recorder.start()
+    assert backend.stream is not None
+    callback = backend.stream.kwargs["callback"]
+    callback(
+        np.array([[0.1], [0.2], [0.3], [0.4]], dtype=np.float32),
+        4,
+        None,
+        None,
+    )
+    complete = recorder.stop()
+
+    tail = recorder.slice_from(complete, start_frame=2)
+
+    assert complete.path.exists()
+    assert tail.frame_count == 2
+    assert tail.sample_rate == 4
+    with wave.open(str(tail.path), "rb") as wav:
+        assert wav.getnchannels() == 1
+        assert wav.getsampwidth() == 2
+        assert wav.getframerate() == 4
+        assert wav.getnframes() == 2
+    recorder.discard(tail)
+    recorder.discard(complete)
+
+
+def test_slice_from_rejects_frame_outside_recording(
+    tmp_path: Path,
+) -> None:
+    artifact_path = tmp_path / "recording.wav"
+    with wave.open(str(artifact_path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16_000)
+        wav.writeframes(b"\x00\x00")
+    recorder = AudioRecorder(tmp_path, sounddevice=FakeSoundDevice())
+    artifact = AudioArtifact(artifact_path, 1, 16_000)
+
+    with pytest.raises(ValueError, match="existing audio frame"):
+        recorder.slice_from(artifact, 1)

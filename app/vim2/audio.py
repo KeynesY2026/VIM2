@@ -137,6 +137,32 @@ class AudioRecorder:
             warnings=warnings,
         )
 
+    def slice_from(
+        self, artifact: AudioArtifact, start_frame: int
+    ) -> AudioArtifact:
+        if start_frame < 0 or start_frame >= artifact.frame_count:
+            raise ValueError(
+                "start_frame must reference an existing audio frame"
+            )
+
+        with wave.open(str(artifact.path), "rb") as source:
+            params = source.getparams()
+            source.setpos(start_frame)
+            frames = source.readframes(params.nframes - start_frame)
+
+        self._temp_dir.mkdir(parents=True, exist_ok=True)
+        path = self._temp_dir / f"tail-{uuid.uuid4().hex}.wav"
+        with wave.open(str(path), "wb") as tail:
+            tail.setparams(params)
+            tail.writeframes(frames)
+
+        return AudioArtifact(
+            path=path,
+            frame_count=params.nframes - start_frame,
+            sample_rate=params.framerate,
+            warnings=artifact.warnings,
+        )
+
     def cancel(self) -> None:
         if self._stream is None:
             return
