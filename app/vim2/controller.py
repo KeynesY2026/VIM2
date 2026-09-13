@@ -34,6 +34,8 @@ class ControllerView(Protocol):
 
     def show_error(self, message: str) -> None: ...
 
+    def show_warning(self, message: str) -> None: ...
+
     def show_retry_error(self, message: str) -> None: ...
 
     def hide_overlay(self) -> None: ...
@@ -153,7 +155,9 @@ class AppController:
 
     def _on_preview_error(self, error: Exception) -> None:
         self._preview_busy = False
-        self._view.show_error(f"实时转写失败，将在停止后重试：{error}")
+        self._view.show_warning(
+            f"实时转写失败，将在下一次刷新时重试：{error}"
+        )
         self._after_preview()
 
     def _after_preview(self) -> None:
@@ -181,6 +185,11 @@ class AppController:
         self._operation_busy = False
         self._render()
         self._view.hide_overlay()
+        if self._session.warnings:
+            warnings = "；".join(self._session.warnings)
+            self._view.show_warning(
+                f"录音期间出现 {warnings}，结果可能不完整。"
+            )
 
     def _on_final_error(self, error: Exception) -> None:
         self._operation_busy = False

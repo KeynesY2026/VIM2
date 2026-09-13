@@ -41,6 +41,7 @@ def test_each_recording_uses_current_default_input_device(tmp_path: Path) -> Non
     assert backend.stream.kwargs["device"] is None
     assert backend.stream.kwargs["samplerate"] == 16_000
     assert backend.stream.kwargs["channels"] == 1
+    assert backend.stream.kwargs["latency"] == "high"
 
 
 def test_stop_writes_pcm_wav_and_cancel_removes_temporary_audio(
@@ -63,7 +64,9 @@ def test_stop_writes_pcm_wav_and_cancel_removes_temporary_audio(
     assert not artifact.path.exists()
 
 
-def test_audio_callback_error_is_reported_on_stop(tmp_path: Path) -> None:
+def test_input_overflow_is_preserved_as_warning_without_losing_audio(
+    tmp_path: Path,
+) -> None:
     backend = FakeSoundDevice()
     recorder = AudioRecorder(tmp_path, sounddevice=backend)
     recorder.start()
@@ -71,12 +74,10 @@ def test_audio_callback_error_is_reported_on_stop(tmp_path: Path) -> None:
     callback = backend.stream.kwargs["callback"]
     callback(np.zeros((1, 1), dtype=np.float32), 1, None, "input overflow")
 
-    try:
-        recorder.stop()
-    except RuntimeError as exc:
-        assert "input overflow" in str(exc)
-    else:
-        raise AssertionError("callback status should fail the recording")
+    artifact = recorder.stop()
+
+    assert artifact.path.is_file()
+    assert artifact.warnings == ("input overflow",)
 
 
 def test_snapshot_writes_audio_without_stopping_active_stream(
@@ -94,5 +95,30 @@ def test_snapshot_writes_audio_without_stopping_active_stream(
     assert snapshot.path.is_file()
     assert snapshot.frame_count == 2
     assert not backend.stream.stopped
+    recorder.discard(snapshot)
+    recorder.cancel()
+
+
+def test_snapshot_does_not_hold_capture_lock_during_audio_concatenation(
+    tmp_path: Path,
+) -> None:
+    backend = FakeSoundDevice()
+    recorder = AudioRecorder(tmp_path, sounddevice=backend)
+    recorder.start()
+    assert backend.stream is not None
+    callback = backend.stream.kwargs["callback"]
+    callback(np.array([[0.1]], dtype=np.float32), 1, None, None)
+    original_join = recorder._join_chunks
+
+    def inspect_lock(chunks):
+        acquired = recorder._lock.acquire(blocking=False)
+        if acquired:
+            recorder._lock.release()
+        assert acquired, "snapshot held the capture lock during concatenation"
+        return original_join(chunks)
+
+    recorder._join_chunks = inspect_lock
+    snapshot = recorder.snapshot()
+
     recorder.discard(snapshot)
     recorder.cancel()

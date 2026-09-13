@@ -104,6 +104,7 @@ class FakeView:
         self.rendered_models: list[ModelId] = []
         self.previews: list[str] = []
         self.errors: list[str] = []
+        self.warnings: list[str] = []
         self.retry_errors: list[str] = []
         self.timers_started: list[int] = []
         self.timers_stopped = 0
@@ -125,6 +126,9 @@ class FakeView:
 
     def show_error(self, message: str) -> None:
         self.errors.append(message)
+
+    def show_warning(self, message: str) -> None:
+        self.warnings.append(message)
 
     def show_retry_error(self, message: str) -> None:
         self.retry_errors.append(message)
@@ -178,7 +182,7 @@ def test_record_preview_and_final_result_flow(tmp_path: Path) -> None:
 
     assert view.timers_started == [90]
     assert view.previews == ["临时文本"]
-    assert paster.calls == [("最终文本", 321)]
+    assert paster.calls == [("临时文本", 321)]
     assert not recorder.path.exists()
     assert controller.state is AppState.READY
 
@@ -246,5 +250,49 @@ def test_stop_requested_before_preview_worker_starts_is_serialized(
     runner.complete_next()
     assert len(runner.tasks) == 1
     runner.complete_next()
-    assert paster.calls == [("final", 321)]
+    assert paster.calls == [("preview", 321)]
     assert controller.state is AppState.READY
+
+
+def test_nonfatal_capture_warning_is_reported_after_result(
+    tmp_path: Path,
+) -> None:
+    controller, _, recorder, _, view, _ = _controller(
+        tmp_path, ["recognized"]
+    )
+    recorder.path.write_bytes(b"audio")
+
+    def stop_with_warning() -> AudioArtifact:
+        recorder.started = False
+        return AudioArtifact(
+            recorder.path,
+            16_000,
+            16_000,
+            warnings=("input overflow",),
+        )
+
+    recorder.stop = stop_with_warning
+    controller.start()
+    controller.toggle_recording()
+    controller.toggle_recording()
+
+    assert view.errors == []
+    assert view.warnings == ["录音期间出现 input overflow，结果可能不完整。"]
+
+
+def test_live_preview_failure_warns_without_hiding_recording(
+    tmp_path: Path,
+) -> None:
+    controller, _, _, _, view, _ = _controller(
+        tmp_path, [RuntimeError("preview failed")]
+    )
+    controller.start()
+    controller.toggle_recording()
+
+    controller.request_preview()
+
+    assert view.errors == []
+    assert view.warnings == [
+        "实时转写失败，将在下一次刷新时重试：preview failed"
+    ]
+    assert controller.state is AppState.RECORDING

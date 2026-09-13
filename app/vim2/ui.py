@@ -92,18 +92,49 @@ class TrayIconFactory:
         return QIcon(pixmap)
 
 
+class _StatusDot(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFixedSize(10, 10)
+        self._color = QColor(230, 60, 60)
+        self._opacity = 1.0
+
+    def set_color(self, color: QColor) -> None:
+        self._color = color
+        self.update()
+
+    def set_pulse_opacity(self, opacity: float) -> None:
+        self._opacity = opacity
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        del event
+        color = QColor(self._color)
+        color.setAlphaF(self._opacity)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawEllipse(QRectF(0.5, 0.5, 9, 9))
+        painter.end()
+
+
 class VoiceOverlay(QWidget):
+    _MINIMUM_WIDTH = 110
+    _MAXIMUM_WIDTH = 560
+
     def __init__(self) -> None:
         super().__init__(
             None,
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint,
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.NoDropShadowWindowHint,
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setFixedSize(560, 32)
+        self.setFixedSize(self._MINIMUM_WIDTH, 32)
         self.setStyleSheet(
             """
             QLabel {
@@ -118,13 +149,7 @@ class VoiceOverlay(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 0, 12, 0)
         layout.setSpacing(8)
-        self._dot = QLabel()
-        self._dot.setFixedSize(10, 10)
-        self._dot.setStyleSheet(
-            "background-color: #E63C3C; border-radius: 5px;"
-        )
-        self._dot_opacity = QGraphicsOpacityEffect(self._dot)
-        self._dot.setGraphicsEffect(self._dot_opacity)
+        self._dot = _StatusDot()
         self._status = QLabel()
         self._preview = QLabel()
         self._preview.setTextInteractionFlags(
@@ -147,6 +172,7 @@ class VoiceOverlay(QWidget):
         self._fade.finished.connect(self._park_if_transparent)
         self._opacity.setOpacity(0.0)
         self._fade_target_visible = False
+        self._target_window: int | None = None
         self.move(-9999, 0)
         self.show()
 
@@ -163,9 +189,8 @@ class VoiceOverlay(QWidget):
         minutes, seconds = divmod(elapsed_seconds, 60)
         self._status.setText(f"正在录音  {minutes:02d}:{seconds:02d}")
         self._preview.setText(self._tail(preview))
-        self._dot.setStyleSheet(
-            "background-color: #E63C3C; border-radius: 5px;"
-        )
+        self._dot.set_color(QColor(230, 60, 60))
+        self._resize_to_content()
         if not self._pulse_timer.isActive():
             self._pulse_timer.start()
 
@@ -173,29 +198,48 @@ class VoiceOverlay(QWidget):
         self.current_preview = detail
         self._status.setText(title)
         self._preview.setText(self._tail(detail))
-        self._dot.setStyleSheet(
-            "background-color: #E6B41E; border-radius: 5px;"
-        )
+        self._dot.set_color(QColor(230, 180, 30))
         self._pulse_timer.stop()
-        self._dot_opacity.setOpacity(1.0)
+        self._dot.set_pulse_opacity(1.0)
+        self._resize_to_content()
 
     @staticmethod
     def _tail(text: str, limit: int = 72) -> str:
         return text if len(text) <= limit else f"…{text[-limit:]}"
 
     def show_for_window(self, target_window: int | None = None) -> None:
-        screen = self._screen_for_window(target_window)
-        area = screen.availableGeometry()
-        self.move(
-            area.x() + (area.width() - self.width()) // 2,
-            area.bottom() - self.height() - 60 + 1,
-        )
+        self._target_window = target_window
+        self._move_on_screen()
         self._fade.stop()
         self._fade_target_visible = True
         self._fade.setStartValue(self._opacity.opacity())
         self._fade.setEndValue(1.0)
         self._ensure_topmost()
         self._fade.start()
+
+    def _move_on_screen(self) -> None:
+        screen = self._screen_for_window(self._target_window)
+        area = screen.availableGeometry()
+        self.move(
+            area.x() + (area.width() - self.width()) // 2,
+            area.bottom() - self.height() - 60 + 1,
+        )
+
+    def _resize_to_content(self) -> None:
+        status_width = self._status.fontMetrics().horizontalAdvance(
+            self._status.text()
+        )
+        preview_width = self._preview.fontMetrics().horizontalAdvance(
+            self._preview.text()
+        )
+        content_width = 50 + status_width
+        if self._preview.text():
+            content_width += 8 + preview_width
+        self.setFixedWidth(
+            max(self._MINIMUM_WIDTH, min(self._MAXIMUM_WIDTH, content_width))
+        )
+        if self._fade_target_visible:
+            self._move_on_screen()
 
     def fade_out(self) -> None:
         self._pulse_timer.stop()
@@ -276,7 +320,7 @@ class VoiceOverlay(QWidget):
     def _pulse(self) -> None:
         self._pulse_phase = (self._pulse_phase + 0.2) % (2 * math.pi)
         opacity = 0.65 + 0.35 * math.sin(self._pulse_phase)
-        self._dot_opacity.setOpacity(max(0.3, min(1.0, opacity)))
+        self._dot.set_pulse_opacity(max(0.3, min(1.0, opacity)))
 
 
 class _Rect(ctypes.Structure):
@@ -330,9 +374,16 @@ class DesktopView:
         self._elapsed_timer = QTimer()
         self._elapsed_timer.setInterval(1000)
         self._elapsed_timer.timeout.connect(self._on_elapsed)
+        self._preview_timer = QTimer()
+        self._preview_timer.setInterval(250)
+        self._preview_timer.timeout.connect(self._on_preview_tick)
         self._max_timer = QTimer()
         self._max_timer.setSingleShot(True)
         self._max_timer.timeout.connect(self._on_max_duration)
+        self._error_hide_timer = QTimer()
+        self._error_hide_timer.setSingleShot(True)
+        self._error_hide_timer.setInterval(10_000)
+        self._error_hide_timer.timeout.connect(self.overlay.fade_out)
 
     def bind(self, controller, quit_callback) -> None:
         self._controller = controller
@@ -390,13 +441,16 @@ class DesktopView:
     ) -> None:
         self._elapsed_seconds = 0
         self._target_window = target_window
+        self._error_hide_timer.stop()
         self.overlay.set_recording(elapsed_seconds=0, preview="")
         self.overlay.show_for_window(target_window)
         self._elapsed_timer.start()
+        self._preview_timer.start()
         self._max_timer.start(max_seconds * 1000)
 
     def stop_recording_timers(self) -> None:
         self._elapsed_timer.stop()
+        self._preview_timer.stop()
         self._max_timer.stop()
 
     def show_preview(self, text: str) -> None:
@@ -414,6 +468,15 @@ class DesktopView:
         )
         self.overlay.set_message("发生错误", message)
         self.overlay.show_for_window(self._target_window)
+        self._error_hide_timer.start()
+
+    def show_warning(self, message: str) -> None:
+        self.tray.showMessage(
+            "VIM2",
+            message,
+            QSystemTrayIcon.MessageIcon.Warning,
+            5000,
+        )
 
     def show_retry_error(self, message: str) -> None:
         if self._controller is None:
@@ -433,6 +496,7 @@ class DesktopView:
             self._controller.cancel()
 
     def hide_overlay(self) -> None:
+        self._error_hide_timer.stop()
         self.overlay.fade_out()
 
     def _on_elapsed(self) -> None:
@@ -441,6 +505,8 @@ class DesktopView:
             elapsed_seconds=self._elapsed_seconds,
             preview=self.overlay.current_preview,
         )
+
+    def _on_preview_tick(self) -> None:
         if self._controller is not None:
             self._controller.request_preview()
 

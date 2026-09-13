@@ -47,11 +47,17 @@ class VoiceSession:
         self._target_window: int | None = None
         self._model_id: ModelId | None = None
         self._pending_audio: AudioArtifact | None = None
+        self._last_preview: str | None = None
+        self._warnings: tuple[str, ...] = ()
         self._shutting_down = False
 
     @property
     def state(self) -> AppState:
         return self._machine.current
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        return self._warnings
 
     def start(self, *, target_window: int, model_id: ModelId) -> None:
         if self.state is not AppState.READY:
@@ -59,6 +65,8 @@ class VoiceSession:
         self._recorder.start()
         self._target_window = target_window
         self._model_id = model_id
+        self._last_preview = None
+        self._warnings = ()
         self._machine.transition_to(AppState.RECORDING)
 
     def stop(self) -> str:
@@ -70,7 +78,10 @@ class VoiceSession:
             self._machine.transition_to(AppState.READY)
             raise
         self._pending_audio = artifact
+        self._warnings = artifact.warnings
         self._machine.transition_to(AppState.FINALIZING)
+        if self._last_preview is not None:
+            return self._complete(self._last_preview)
         return self._recognize_pending()
 
     def retry(self) -> str:
@@ -85,9 +96,12 @@ class VoiceSession:
         artifact = self._recorder.snapshot()
         self._machine.transition_to(AppState.LIVE_TRANSCRIBING)
         try:
-            return self._recognizer.transcribe(
+            text = self._recognizer.transcribe(
                 artifact.path, self._model_id
             ).strip()
+            if text:
+                self._last_preview = text
+            return text
         finally:
             self._recorder.discard(artifact)
             if not self._shutting_down:
@@ -108,6 +122,11 @@ class VoiceSession:
             self._machine.transition_to(AppState.RETRY_PENDING)
             raise FinalRecognitionError(str(exc)) from exc
 
+        return self._complete(text)
+
+    def _complete(self, text: str) -> str:
+        if self._pending_audio is None or self._target_window is None:
+            raise RuntimeError("Recognition session data is incomplete")
         artifact = self._pending_audio
         try:
             if text:
@@ -116,6 +135,7 @@ class VoiceSession:
         finally:
             self._recorder.discard(artifact)
             self._pending_audio = None
+            self._last_preview = None
             self._machine.transition_to(AppState.READY)
 
     def cancel(self) -> None:

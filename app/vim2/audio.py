@@ -15,6 +15,7 @@ class AudioArtifact:
     path: Path
     frame_count: int
     sample_rate: int
+    warnings: tuple[str, ...] = ()
 
     @property
     def duration_seconds(self) -> float:
@@ -55,6 +56,8 @@ class AudioRecorder:
                 samplerate=self._sample_rate,
                 channels=1,
                 dtype="float32",
+                blocksize=0,
+                latency="high",
                 callback=self._on_audio,
             )
             stream.start()
@@ -72,10 +75,11 @@ class AudioRecorder:
         status: object,
     ) -> None:
         del frames, time_info
+        chunk = indata.copy()
         with self._lock:
             if status:
                 self._status_errors.append(str(status))
-            self._chunks.append(indata.copy())
+            self._chunks.append(chunk)
 
     def stop(self) -> AudioArtifact:
         if self._stream is None:
@@ -86,21 +90,20 @@ class AudioRecorder:
         stream.close()
 
         with self._lock:
-            chunks = self._chunks
-            errors = tuple(self._status_errors)
+            chunks = list(self._chunks)
+            warnings = tuple(self._status_errors)
             self._chunks = []
             self._status_errors = []
-        if errors:
-            raise RuntimeError(f"Microphone capture failed: {'; '.join(errors)}")
 
         samples = self._join_chunks(chunks)
-        return self._write_wav(samples, "recording")
+        return self._write_wav(samples, "recording", warnings=warnings)
 
     def snapshot(self) -> AudioArtifact:
         if self._stream is None:
             raise RuntimeError("No recording is in progress")
         with self._lock:
-            samples = self._join_chunks(self._chunks)
+            chunks = list(self._chunks)
+        samples = self._join_chunks(chunks)
         return self._write_wav(samples, "preview")
 
     @staticmethod
@@ -111,7 +114,13 @@ class AudioRecorder:
             else np.empty(0, dtype=np.float32)
         )
 
-    def _write_wav(self, samples: np.ndarray, prefix: str) -> AudioArtifact:
+    def _write_wav(
+        self,
+        samples: np.ndarray,
+        prefix: str,
+        *,
+        warnings: tuple[str, ...] = (),
+    ) -> AudioArtifact:
         pcm = np.clip(samples, -1.0, 1.0)
         pcm = (pcm * 32767.0).astype("<i2")
         self._temp_dir.mkdir(parents=True, exist_ok=True)
@@ -125,6 +134,7 @@ class AudioRecorder:
             path=path,
             frame_count=len(samples),
             sample_rate=self._sample_rate,
+            warnings=warnings,
         )
 
     def cancel(self) -> None:

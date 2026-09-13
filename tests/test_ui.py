@@ -64,6 +64,7 @@ def test_overlay_is_non_activating_click_through_compact_capsule() -> None:
         Qt.WidgetAttribute.WA_TransparentForMouseEvents
     )
     assert overlay.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert overlay.windowFlags() & Qt.WindowType.NoDropShadowWindowHint
     assert not overlay.windowFlags() & Qt.WindowType.WindowMinMaxButtonsHint
 
 
@@ -74,12 +75,29 @@ def test_overlay_paints_v1_translucent_background() -> None:
     overlay.show_for_window()
     QTest.qWait(220)
 
-    background = overlay.grab().toImage().pixelColor(540, 16)
+    background = overlay.grab().toImage().pixelColor(
+        overlay.width() - 20, 16
+    )
 
     assert background.red() == 25
     assert background.green() == 25
     assert background.blue() == 32
     assert background.alpha() >= 220
+
+
+def test_recording_overlay_stays_compact_and_draws_red_dot() -> None:
+    app = _app()
+    overlay = VoiceOverlay()
+    overlay.set_recording(elapsed_seconds=1, preview="")
+    overlay.show_for_window()
+    QTest.qWait(220)
+
+    dot = overlay._dot.grab().toImage().pixelColor(5, 5)
+
+    assert overlay.width() < 300
+    assert dot.red() >= 220
+    assert dot.green() < 100
+    assert dot.alpha() > 0
 
 
 def test_overlay_retains_full_preview_while_showing_tail() -> None:
@@ -113,6 +131,29 @@ def test_tray_menu_reflects_state_and_selected_model() -> None:
     assert view.recording_action.text() == "识别中…"
     assert not view.recording_action.isEnabled()
     assert not view.fast_model_action.isEnabled()
+
+
+def test_live_preview_timer_runs_every_250_milliseconds() -> None:
+    _app()
+    view = DesktopView()
+
+    assert view._preview_timer.interval() == 250
+
+
+def test_error_overlay_stays_for_ten_seconds_then_fades() -> None:
+    _app()
+    view = DesktopView()
+
+    view.show_error("Microphone unavailable")
+
+    assert view.overlay.x() != -9999
+    assert view._error_hide_timer.isActive()
+    assert view._error_hide_timer.interval() == 10_000
+
+    view._error_hide_timer.timeout.emit()
+    QTest.qWait(250)
+
+    assert view.overlay.x() == -9999
 
 
 def test_ready_state_parks_loading_overlay_off_screen() -> None:
