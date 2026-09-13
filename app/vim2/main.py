@@ -69,7 +69,7 @@ def run(argv: Sequence[str] | None = None) -> int:
 
     result = PreflightChecker(paths).check(
         settings.selected_model,
-        check_cuda=not args.skip_cuda_check,
+        check_cuda=args.check and not args.skip_cuda_check,
         check_runtime=not args.skip_runtime_check,
     )
     if not result.ok:

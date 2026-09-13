@@ -1,6 +1,7 @@
+import builtins
+import os
 from pathlib import Path
 from types import SimpleNamespace
-import os
 
 import pytest
 
@@ -14,9 +15,13 @@ from vim2.recognizer import (
 
 
 class FakeCuda:
-    def __init__(self) -> None:
+    def __init__(self, *, available: bool = True) -> None:
+        self.available = available
         self.empty_cache_calls = 0
         self.ipc_collect_calls = 0
+
+    def is_available(self) -> bool:
+        return self.available
 
     def empty_cache(self) -> None:
         self.empty_cache_calls += 1
@@ -170,3 +175,38 @@ def test_offline_environment_disables_implicit_model_downloads(
 
     assert os.environ["HF_HUB_OFFLINE"] == "1"
     assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+
+
+def test_constructor_does_not_import_model_runtime(
+    tmp_path: Path, monkeypatch
+) -> None:
+    original_import = builtins.__import__
+
+    def reject_runtime_import(name, *args, **kwargs):
+        if name in {"torch", "qwen_asr", "transformers"}:
+            raise AssertionError(f"eager runtime import: {name}")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_runtime_import)
+
+    QwenRecognizer(AppPaths.from_root(tmp_path))
+
+
+def test_load_reports_unavailable_cuda_before_loading_model(
+    tmp_path: Path,
+) -> None:
+    paths = AppPaths.from_root(tmp_path)
+    torch = FakeTorch()
+    torch.cuda.available = False
+    loader = FakeLoader()
+    recognizer = QwenRecognizer(
+        paths,
+        torch_module=torch,
+        model_class=loader,
+        bits_config_class=FakeBitsConfig,
+    )
+
+    with pytest.raises(RuntimeError, match="CUDA is unavailable"):
+        recognizer.load(ModelId.FAST)
+
+    assert loader.calls == []

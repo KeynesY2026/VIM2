@@ -1,5 +1,7 @@
 from pathlib import Path
+from types import SimpleNamespace
 
+import vim2.application as application_module
 import vim2.main as main_module
 from vim2.main import run
 from vim2.models import MODEL_SPECS, ModelId
@@ -74,3 +76,33 @@ def test_windowed_startup_reports_errors_in_message_box(
     assert exit_code == 1
     assert messages and "Model is incomplete:" in messages[0]
     assert capsys.readouterr().err == ""
+
+
+def test_desktop_startup_defers_cuda_probe_until_after_tray_creation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    checks: list[tuple[ModelId, bool, bool]] = []
+
+    class RecordingChecker:
+        def __init__(self, paths) -> None:
+            del paths
+
+        def check(
+            self,
+            selected_model: ModelId,
+            *,
+            check_cuda: bool,
+            check_runtime: bool,
+        ):
+            checks.append((selected_model, check_cuda, check_runtime))
+            return SimpleNamespace(ok=True, errors=())
+
+    monkeypatch.setattr(main_module, "PreflightChecker", RecordingChecker)
+    monkeypatch.setattr(
+        application_module,
+        "run_desktop_application",
+        lambda paths, settings: 0,
+    )
+
+    assert run(["--root", str(tmp_path), "--skip-runtime-check"]) == 0
+    assert checks == [(ModelId.FAST, False, False)]

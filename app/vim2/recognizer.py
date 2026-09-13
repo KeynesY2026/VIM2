@@ -29,19 +29,6 @@ class QwenRecognizer:
         bits_config_class: Any | None = None,
     ) -> None:
         enforce_offline_environment()
-        if torch_module is None:
-            import torch
-
-            torch_module = torch
-        if model_class is None:
-            from qwen_asr import Qwen3ASRModel
-
-            model_class = Qwen3ASRModel
-        if bits_config_class is None:
-            from transformers import BitsAndBytesConfig
-
-            bits_config_class = BitsAndBytesConfig
-
         self._paths = paths
         self._torch = torch_module
         self._model_class = model_class
@@ -62,6 +49,12 @@ class QwenRecognizer:
                 raise RuntimeError(
                     "Unload the resident model before loading another model"
                 )
+            self._load_runtime()
+            if not self._torch.cuda.is_available():
+                raise RuntimeError(
+                    "CUDA is unavailable; install a compatible NVIDIA driver "
+                    "and confirm that the GPU is enabled."
+                )
             spec = MODEL_SPECS[model_id]
             kwargs: dict[str, object] = {
                 "device_map": "cuda:0",
@@ -78,6 +71,20 @@ class QwenRecognizer:
                 str(model_path), **kwargs
             )
             self._loaded_model = model_id
+
+    def _load_runtime(self) -> None:
+        if self._torch is None:
+            import torch
+
+            self._torch = torch
+        if self._model_class is None:
+            from qwen_asr import Qwen3ASRModel
+
+            self._model_class = Qwen3ASRModel
+        if self._bits_config_class is None:
+            from transformers import BitsAndBytesConfig
+
+            self._bits_config_class = BitsAndBytesConfig
 
     def unload(self) -> None:
         with self._lock:
