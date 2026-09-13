@@ -15,6 +15,16 @@ def test_launcher_uses_global_python_without_bundled_environment() -> None:
     assert "python -m vim2 %*" in launcher
 
 
+def test_windowed_launcher_uses_hidden_windows_powershell() -> None:
+    launcher = (ROOT / "Start.cmd").read_text(encoding="utf-8")
+    script = (ROOT / "start.ps1").read_text(encoding="utf-8")
+
+    assert "powershell.exe" in launcher.lower()
+    assert "-WindowStyle Hidden" in launcher
+    assert "pythonw.exe" in script
+    assert "-m\", \"vim2\", \"--windowed\"" in script
+
+
 def test_release_preparation_uses_fixed_local_model_snapshots() -> None:
     script = (ROOT / "tools" / "prepare-release.ps1").read_text(
         encoding="utf-8"

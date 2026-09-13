@@ -16,8 +16,10 @@ Qwen3-ASR 模型在 NVIDIA GPU 上离线识别，并通过系统剪贴板和
 
 ## 启动
 
-双击 `start.bat`。首次运行默认加载 Qwen3-ASR 0.6B FP16。默认全局
-热键是右 Alt；再次按下停止录音，录音期间按 Esc 取消。
+双击 `Start.cmd`。它通过隐藏的 Windows PowerShell 启动 `pythonw.exe`，
+桌面不会保留命令行窗口。`start.bat` 保留为诊断入口，可显示启动错误和
+执行 `start.bat --check`。首次运行默认加载 Qwen3-ASR 0.6B FP16。
+默认全局热键是右 Alt；再次按下停止录音，录音期间按 Esc 取消。
 
 配置位于：
 
@@ -44,7 +46,7 @@ python -m pip install -r .\requirements.lock `
   --extra-index-url https://download.pytorch.org/whl/cu128
 ```
 
-该安装不是 `start.bat` 或应用启动流程的一部分。
+该安装不是 `Start.cmd`、`start.bat` 或应用启动流程的一部分。
 
 ## A/B 性能测试
 

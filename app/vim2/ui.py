@@ -9,6 +9,7 @@ from PySide6.QtCore import (
     QPoint,
     QPropertyAnimation,
     QRect,
+    QRectF,
     Qt,
     QTimer,
 )
@@ -105,11 +106,6 @@ class VoiceOverlay(QWidget):
         self.setFixedSize(560, 32)
         self.setStyleSheet(
             """
-            VoiceOverlay {
-                background-color: rgba(25, 25, 32, 224);
-                border: 1px solid rgba(80, 80, 100, 80);
-                border-radius: 14px;
-            }
             QLabel {
                 color: #F0F0F5;
                 font-family: "Segoe UI";
@@ -148,7 +144,11 @@ class VoiceOverlay(QWidget):
         self._fade = QPropertyAnimation(self._opacity, b"opacity", self)
         self._fade.setDuration(200)
         self._fade.setEasingCurve(QEasingCurve.Type.InOutQuad)
-        self._fade.finished.connect(self._hide_if_transparent)
+        self._fade.finished.connect(self._park_if_transparent)
+        self._opacity.setOpacity(0.0)
+        self._fade_target_visible = False
+        self.move(-9999, 0)
+        self.show()
 
     @property
     def displayed_text(self) -> str:
@@ -191,21 +191,36 @@ class VoiceOverlay(QWidget):
             area.bottom() - self.height() - 60 + 1,
         )
         self._fade.stop()
+        self._fade_target_visible = True
         self._fade.setStartValue(self._opacity.opacity())
         self._fade.setEndValue(1.0)
-        self.show()
+        self._ensure_topmost()
         self._fade.start()
 
     def fade_out(self) -> None:
         self._pulse_timer.stop()
         self._fade.stop()
+        self._fade_target_visible = False
         self._fade.setStartValue(self._opacity.opacity())
         self._fade.setEndValue(0.0)
         self._fade.start()
 
-    def _hide_if_transparent(self) -> None:
-        if self._opacity.opacity() == 0.0:
-            self.hide()
+    def _park_if_transparent(self) -> None:
+        if not self._fade_target_visible:
+            self.move(-9999, 0)
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor(25, 25, 32, 224))
+        pen = painter.pen()
+        pen.setColor(QColor(80, 80, 100, 80))
+        pen.setWidthF(1.0)
+        painter.setPen(pen)
+        bounds = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        painter.drawRoundedRect(bounds, 14, 14)
+        painter.end()
+        super().paintEvent(event)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -213,6 +228,14 @@ class VoiceOverlay(QWidget):
             user32 = ctypes.WinDLL("user32", use_last_error=True)
             get_window_long = user32.GetWindowLongPtrW
             set_window_long = user32.SetWindowLongPtrW
+            get_window_long.argtypes = (ctypes.c_void_p, ctypes.c_int)
+            get_window_long.restype = ctypes.c_ssize_t
+            set_window_long.argtypes = (
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_ssize_t,
+            )
+            set_window_long.restype = ctypes.c_ssize_t
             handle = int(self.winId())
             extended_style = get_window_long(handle, -20)
             set_window_long(
@@ -220,6 +243,20 @@ class VoiceOverlay(QWidget):
                 -20,
                 extended_style | 0x00000080 | 0x00000020 | 0x08000000,
             )
+
+    def _ensure_topmost(self) -> None:
+        if not hasattr(ctypes, "WinDLL"):
+            return
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.SetWindowPos(
+            int(self.winId()),
+            ctypes.c_void_p(-1),
+            0,
+            0,
+            0,
+            0,
+            0x0002 | 0x0001 | 0x0010 | 0x0040,
+        )
 
     def _screen_for_window(self, target_window: int | None):
         app = QApplication.instance()

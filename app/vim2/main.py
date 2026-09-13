@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -33,7 +34,25 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--windowed",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     return parser
+
+
+def _show_startup_message(message: str) -> None:
+    ctypes.WinDLL("user32", use_last_error=True).MessageBoxW(
+        None, message, "VIM2", 0x00000010
+    )
+
+
+def _report_startup_error(message: str, *, windowed: bool) -> None:
+    if windowed:
+        _show_startup_message(message)
+    else:
+        print(message, file=sys.stderr)
 
 
 def run(argv: Sequence[str] | None = None) -> int:
@@ -42,7 +61,10 @@ def run(argv: Sequence[str] | None = None) -> int:
     try:
         settings = SettingsRepository(paths.config_dir).load()
     except (OSError, ValueError) as exc:
-        print(f"VIM2 cannot start:\n- Invalid configuration: {exc}", file=sys.stderr)
+        _report_startup_error(
+            f"VIM2 cannot start:\n- Invalid configuration: {exc}",
+            windowed=args.windowed,
+        )
         return 1
 
     result = PreflightChecker(paths).check(
@@ -52,7 +74,10 @@ def run(argv: Sequence[str] | None = None) -> int:
     )
     if not result.ok:
         details = "\n".join(f"- {error}" for error in result.errors)
-        print(f"VIM2 cannot start:\n{details}", file=sys.stderr)
+        _report_startup_error(
+            f"VIM2 cannot start:\n{details}",
+            windowed=args.windowed,
+        )
         return 1
 
     if args.check:

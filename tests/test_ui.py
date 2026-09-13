@@ -67,6 +67,21 @@ def test_overlay_is_non_activating_click_through_compact_capsule() -> None:
     assert not overlay.windowFlags() & Qt.WindowType.WindowMinMaxButtonsHint
 
 
+def test_overlay_paints_v1_translucent_background() -> None:
+    app = _app()
+    overlay = VoiceOverlay()
+    overlay.set_recording(elapsed_seconds=1, preview="")
+    overlay.show_for_window()
+    QTest.qWait(220)
+
+    background = overlay.grab().toImage().pixelColor(540, 16)
+
+    assert background.red() == 25
+    assert background.green() == 25
+    assert background.blue() == 32
+    assert background.alpha() >= 220
+
+
 def test_overlay_retains_full_preview_while_showing_tail() -> None:
     _app()
     overlay = VoiceOverlay()
@@ -100,7 +115,7 @@ def test_tray_menu_reflects_state_and_selected_model() -> None:
     assert not view.fast_model_action.isEnabled()
 
 
-def test_ready_state_hides_loading_overlay() -> None:
+def test_ready_state_parks_loading_overlay_off_screen() -> None:
     _app()
     view = DesktopView()
     view.render_state(AppState.MODEL_LOADING, ModelId.FAST)
@@ -109,4 +124,5 @@ def test_ready_state_hides_loading_overlay() -> None:
     view.render_state(AppState.READY, ModelId.FAST)
     QTest.qWait(250)
 
-    assert not view.overlay.isVisible()
+    assert view.overlay.isVisible()
+    assert view.overlay.x() == -9999

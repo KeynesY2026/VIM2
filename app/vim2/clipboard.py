@@ -11,6 +11,10 @@ INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
 VK_CONTROL = 0x11
 VK_V = 0x56
+VK_ESCAPE = 0x1B
+GUI_INMENUMODE = 0x00000004
+GUI_SYSTEMMENUMODE = 0x00000008
+GUI_POPUPMENUMODE = 0x00000010
 
 
 class ClipboardPasteError(RuntimeError):
@@ -21,6 +25,8 @@ class WindowsApi(Protocol):
     def set_clipboard_text(self, text: str) -> None: ...
 
     def set_foreground_window(self, handle: int) -> bool: ...
+
+    def exit_menu_mode(self, handle: int) -> None: ...
 
     def send_ctrl_v(self) -> bool: ...
 
@@ -35,13 +41,59 @@ class _KeyboardInput(ctypes.Structure):
     )
 
 
+class _MouseInput(ctypes.Structure):
+    _fields_ = (
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", wintypes.WPARAM),
+    )
+
+
+class _HardwareInput(ctypes.Structure):
+    _fields_ = (
+        ("uMsg", wintypes.DWORD),
+        ("wParamL", wintypes.WORD),
+        ("wParamH", wintypes.WORD),
+    )
+
+
 class _InputUnion(ctypes.Union):
-    _fields_ = (("ki", _KeyboardInput),)
+    _fields_ = (
+        ("mi", _MouseInput),
+        ("ki", _KeyboardInput),
+        ("hi", _HardwareInput),
+    )
 
 
 class _Input(ctypes.Structure):
     _anonymous_ = ("value",)
     _fields_ = (("type", wintypes.DWORD), ("value", _InputUnion))
+
+
+class _Rect(ctypes.Structure):
+    _fields_ = (
+        ("left", wintypes.LONG),
+        ("top", wintypes.LONG),
+        ("right", wintypes.LONG),
+        ("bottom", wintypes.LONG),
+    )
+
+
+class _GuiThreadInfo(ctypes.Structure):
+    _fields_ = (
+        ("cbSize", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("hwndActive", wintypes.HWND),
+        ("hwndFocus", wintypes.HWND),
+        ("hwndCapture", wintypes.HWND),
+        ("hwndMenuOwner", wintypes.HWND),
+        ("hwndMoveSize", wintypes.HWND),
+        ("hwndCaret", wintypes.HWND),
+        ("rcCaret", _Rect),
+    )
 
 
 class NativeWindowsApi:
@@ -62,6 +114,8 @@ class NativeWindowsApi:
         )
         self._user32.SetClipboardData.restype = wintypes.HANDLE
         self._user32.GetForegroundWindow.restype = wintypes.HWND
+        self._user32.IsWindow.argtypes = (wintypes.HWND,)
+        self._user32.IsWindow.restype = wintypes.BOOL
         self._user32.SetForegroundWindow.argtypes = (wintypes.HWND,)
         self._user32.SetForegroundWindow.restype = wintypes.BOOL
         self._user32.GetWindowThreadProcessId.argtypes = (
@@ -75,6 +129,11 @@ class NativeWindowsApi:
             wintypes.BOOL,
         )
         self._user32.AttachThreadInput.restype = wintypes.BOOL
+        self._user32.GetGUIThreadInfo.argtypes = (
+            wintypes.DWORD,
+            ctypes.POINTER(_GuiThreadInfo),
+        )
+        self._user32.GetGUIThreadInfo.restype = wintypes.BOOL
         self._user32.SendInput.argtypes = (
             wintypes.UINT,
             ctypes.POINTER(_Input),
@@ -124,34 +183,81 @@ class NativeWindowsApi:
                 self._kernel32.GlobalFree(memory)
 
     def set_foreground_window(self, handle: int) -> bool:
+        if not handle or not self._user32.IsWindow(handle):
+            return False
         if self._user32.GetForegroundWindow() == handle:
             return True
+        foreground = self._user32.GetForegroundWindow()
         target_thread = self._user32.GetWindowThreadProcessId(handle, None)
+        foreground_thread = self._user32.GetWindowThreadProcessId(
+            foreground, None
+        )
         current_thread = self._kernel32.GetCurrentThreadId()
-        attached = (
+        attached_foreground = (
+            foreground_thread
+            and foreground_thread != current_thread
+            and self._user32.AttachThreadInput(
+                current_thread, foreground_thread, True
+            )
+        )
+        attached_target = (
             target_thread
             and target_thread != current_thread
+            and target_thread != foreground_thread
             and self._user32.AttachThreadInput(
                 current_thread, target_thread, True
             )
         )
         try:
-            self._user32.ShowWindow(handle, 9)
+            self._user32.ShowWindow(handle, 5)
             self._user32.BringWindowToTop(handle)
-            return bool(self._user32.SetForegroundWindow(handle))
+            self._user32.SetForegroundWindow(handle)
         finally:
-            if attached:
+            if attached_target:
                 self._user32.AttachThreadInput(
                     current_thread, target_thread, False
                 )
+            if attached_foreground:
+                self._user32.AttachThreadInput(
+                    current_thread, foreground_thread, False
+                )
+        time.sleep(0.1)
+        return self._user32.GetForegroundWindow() == handle
+
+    def exit_menu_mode(self, handle: int) -> None:
+        target_thread = self._user32.GetWindowThreadProcessId(handle, None)
+        if not target_thread:
+            return
+        info = _GuiThreadInfo(cbSize=ctypes.sizeof(_GuiThreadInfo))
+        if not self._user32.GetGUIThreadInfo(
+            target_thread, ctypes.byref(info)
+        ):
+            return
+        menu_mask = (
+            GUI_INMENUMODE | GUI_SYSTEMMENUMODE | GUI_POPUPMENUMODE
+        )
+        if not info.flags & menu_mask:
+            return
+        self._send_keys(
+            (
+                self._key_event(VK_ESCAPE, 0),
+                self._key_event(VK_ESCAPE, KEYEVENTF_KEYUP),
+            )
+        )
+        time.sleep(0.01)
 
     def send_ctrl_v(self) -> bool:
-        events = (_Input * 4)(
-            self._key_event(VK_CONTROL, 0),
-            self._key_event(VK_V, 0),
-            self._key_event(VK_V, KEYEVENTF_KEYUP),
-            self._key_event(VK_CONTROL, KEYEVENTF_KEYUP),
+        return self._send_keys(
+            (
+                self._key_event(VK_CONTROL, 0),
+                self._key_event(VK_V, 0),
+                self._key_event(VK_V, KEYEVENTF_KEYUP),
+                self._key_event(VK_CONTROL, KEYEVENTF_KEYUP),
+            )
         )
+
+    def _send_keys(self, keys: tuple[_Input, ...]) -> bool:
+        events = (_Input * len(keys))(*keys)
         return self._user32.SendInput(
             len(events), events, ctypes.sizeof(_Input)
         ) == len(events)
@@ -195,7 +301,7 @@ class WindowsClipboardPaster:
                 "Cannot restore the target window; recognized text remains "
                 "in the clipboard."
             )
-        time.sleep(0.05)
+        self._api.exit_menu_mode(target_window)
         if not self._api.send_ctrl_v():
             raise ClipboardPasteError(
                 "Cannot send Ctrl+V; recognized text remains in the clipboard."

@@ -1,6 +1,12 @@
+import ctypes
+
 import pytest
 
-from vim2.clipboard import ClipboardPasteError, WindowsClipboardPaster
+from vim2.clipboard import (
+    ClipboardPasteError,
+    WindowsClipboardPaster,
+    _Input,
+)
 
 
 class FakeWindowsApi:
@@ -22,6 +28,9 @@ class FakeWindowsApi:
         self.calls.append(("ctrl_v", None))
         return self.send_ok
 
+    def exit_menu_mode(self, handle: int) -> None:
+        self.calls.append(("menu", handle))
+
 
 def test_paste_waits_for_hotkey_release_and_targets_original_window() -> None:
     api = FakeWindowsApi()
@@ -37,6 +46,7 @@ def test_paste_waits_for_hotkey_release_and_targets_original_window() -> None:
     assert api.calls == [
         ("clipboard", "Unicode 文本"),
         ("foreground", 123),
+        ("menu", 123),
         ("ctrl_v", None),
     ]
 
@@ -64,3 +74,9 @@ def test_send_input_failure_is_reported_without_clearing_clipboard() -> None:
         paster.paste("recoverable text", target_window=123)
 
     assert api.clipboard_text == "recoverable text"
+
+
+def test_send_input_structure_matches_native_windows_abi() -> None:
+    expected_size = 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28
+
+    assert ctypes.sizeof(_Input) == expected_size

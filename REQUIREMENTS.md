@@ -39,7 +39,7 @@ VIM2 是 VIM 第一版的后续版本。产品继续提供 Windows 全局语音�
 
 ### 2.1 首次启动
 
-1. 用户双击 Portable 目录中的 `start.bat` 启动 VIM2。
+1. 用户双击 Portable 目录中的 `Start.cmd`，由隐藏的 Windows PowerShell 启动 VIM2。
 2. 程序验证 Python、模型、依赖和 GPU 是否可用。
 3. 程序加载上次选择的模型；首次运行默认选择 Qwen3-ASR 0.6B FP16。
 4. 加载期间显示明确状态，不允许用户误以为程序已经可以录音。
@@ -214,7 +214,9 @@ VIM2 是 VIM 第一版的后续版本。产品继续提供 Windows 全局语音�
 
 ```text
 VIM2/
+├── Start.cmd
 ├── start.bat
+├── start.ps1
 ├── app/
 │   └── Python 应用代码
 ├── requirements.lock
@@ -241,8 +243,9 @@ VIM2/
 - 路径中包含空格或中文时必须正常运行。
 - 配置、日志和模型路径均应以应用目录为基准。
 - 发布说明必须列出支持的 Python 大版本、最低 NVIDIA 驱动版本和实际验证过的 Windows 版本。
-- `start.bat` 必须从自身所在目录解析所有相对路径，不得依赖用户当前工作目录。
-- `start.bat` 必须检查 Python 是否存在且版本兼容；检查失败时显示明确错误并保持窗口可见。
+- `Start.cmd` 和 `start.ps1` 必须从自身所在目录解析所有相对路径，不得依赖用户当前工作目录。
+- `Start.cmd` 必须通过隐藏的 Windows PowerShell 和 `pythonw.exe` 启动，不得在桌面保留命令行窗口。
+- 启动脚本必须检查 Python 是否存在且版本兼容；图形启动失败时使用消息框显示明确错误。`start.bat` 作为诊断入口保留控制台输出。
 - Python 第三方依赖使用全局 Python 环境，版本由根目录 `requirements.lock` 锁定；正常启动只验证依赖，不得执行 `pip install`。
 - 正式应用的业务逻辑、托盘、悬浮窗、全局热键、录音、模型管理和自动粘贴均使用 Python 实现。
 
