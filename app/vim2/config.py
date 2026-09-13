@@ -7,6 +7,9 @@ from pathlib import Path
 from vim2.models import ModelId
 
 DEFAULT_HOTKEY = "RightAlt"
+DEFAULT_PREVIEW_INTERVAL_MS = 1_000
+MIN_PREVIEW_INTERVAL_MS = 250
+MAX_PREVIEW_INTERVAL_MS = 1_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,6 +17,7 @@ class Settings:
     selected_model: ModelId = ModelId.FAST
     hotkey: str = DEFAULT_HOTKEY
     max_recording_seconds: int = 90
+    preview_interval_ms: int = DEFAULT_PREVIEW_INTERVAL_MS
 
 
 class SettingsRepository:
@@ -40,6 +44,19 @@ class SettingsRepository:
                 "max_recording_seconds must be an integer from 1 through 90"
             )
 
+        preview_interval_ms = values.get(
+            "preview_interval_ms", DEFAULT_PREVIEW_INTERVAL_MS
+        )
+        if (
+            not isinstance(preview_interval_ms, int)
+            or not MIN_PREVIEW_INTERVAL_MS
+            <= preview_interval_ms
+            <= MAX_PREVIEW_INTERVAL_MS
+        ):
+            raise ValueError(
+                "preview_interval_ms must be an integer from 250 through 1000"
+            )
+
         hotkey = DEFAULT_HOTKEY
         if self._hotkey_path.is_file():
             hotkey = self._hotkey_path.read_text(encoding="utf-8").strip()
@@ -50,6 +67,7 @@ class SettingsRepository:
             selected_model=model,
             hotkey=hotkey,
             max_recording_seconds=max_seconds,
+            preview_interval_ms=preview_interval_ms,
         )
 
     def save(self, settings: Settings) -> None:

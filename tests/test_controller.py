@@ -116,6 +116,7 @@ class FakeView:
         self.warnings: list[str] = []
         self.retry_errors: list[str] = []
         self.timers_started: list[int] = []
+        self.preview_intervals: list[int] = []
         self.timers_stopped = 0
 
     def render_state(self, state: AppState, model_id: ModelId) -> None:
@@ -123,9 +124,13 @@ class FakeView:
         self.rendered_models.append(model_id)
 
     def start_recording_timers(
-        self, max_seconds: int, target_window: int
+        self,
+        max_seconds: int,
+        target_window: int,
+        preview_interval_ms: int,
     ) -> None:
         self.timers_started.append(max_seconds)
+        self.preview_intervals.append(preview_interval_ms)
 
     def stop_recording_timers(self) -> None:
         self.timers_stopped += 1
@@ -190,6 +195,7 @@ def test_record_preview_and_final_result_flow(tmp_path: Path) -> None:
     controller.toggle_recording()
 
     assert view.timers_started == [90]
+    assert view.preview_intervals == [1_000]
     assert view.previews == ["临时文本"]
     assert paster.calls == [("最终文本", 321)]
     assert len(recorder.discarded) == 2
@@ -307,3 +313,27 @@ def test_live_preview_failure_warns_without_hiding_recording(
         "实时转写失败，将在下一次刷新时重试：preview failed"
     ]
     assert controller.state is AppState.RECORDING
+
+
+def test_configured_preview_interval_is_forwarded_to_view(
+    tmp_path: Path,
+) -> None:
+    _, recognizer, recorder, paster, view, repository = _controller(
+        tmp_path, []
+    )
+    machine = StateMachine()
+    session = VoiceSession(machine, recorder, recognizer, paster)
+    controller = AppController(
+        machine=machine,
+        settings=Settings(preview_interval_ms=500),
+        settings_repository=repository,
+        recognizer=recognizer,
+        session=session,
+        view=view,
+        task_runner=ImmediateRunner(),
+        foreground_window=lambda: 321,
+    )
+    controller.start()
+    controller.toggle_recording()
+
+    assert view.preview_intervals == [500]

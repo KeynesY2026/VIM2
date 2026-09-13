@@ -13,6 +13,7 @@ from vim2.transcript import (
 
 TAIL_OVERLAP_SECONDS = 8
 MAX_TAIL_RATIO = 0.70
+MAX_PREVIEW_SECONDS = 12
 RECOGNITION_ERRORS = (OSError, RuntimeError, ValueError, MemoryError)
 
 
@@ -130,10 +131,11 @@ class VoiceSession:
         artifact = self._recorder.snapshot()
         self._machine.transition_to(AppState.LIVE_TRANSCRIBING)
         try:
-            text = self._recognizer.transcribe(
+            text, is_complete = self._recognize_preview(
                 artifact, self._model_id
-            ).strip()
-            self._stable_prefix.observe(text, artifact.frame_count)
+            )
+            if is_complete:
+                self._stable_prefix.observe(text, artifact.frame_count)
             return text
         finally:
             self._recorder.discard(artifact)
@@ -142,6 +144,30 @@ class VoiceSession:
                 and self.state is AppState.LIVE_TRANSCRIBING
             ):
                 self._machine.transition_to(AppState.RECORDING)
+
+    def _recognize_preview(
+        self, artifact: AudioArtifact, model_id: ModelId
+    ) -> tuple[str, bool]:
+        max_frames = artifact.sample_rate * MAX_PREVIEW_SECONDS
+        if artifact.frame_count <= max_frames:
+            text = self._recognizer.transcribe(artifact, model_id).strip()
+            return text, True
+
+        window: AudioArtifact | None = None
+        try:
+            window = self._recorder.slice_from(
+                artifact, artifact.frame_count - max_frames
+            )
+            text = self._recognizer.transcribe(window, model_id).strip()
+            checkpoint = self._stable_prefix.checkpoint
+            if checkpoint is not None:
+                merged = merge_stable_tail(checkpoint, text)
+                if merged is not None:
+                    return merged, True
+            return text, False
+        finally:
+            if window is not None:
+                self._recorder.discard(window)
 
     def _recognize_pending(self, *, allow_tail: bool) -> str:
         if (

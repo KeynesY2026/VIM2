@@ -25,7 +25,10 @@ class ControllerView(Protocol):
     def render_state(self, state: AppState, model_id: ModelId) -> None: ...
 
     def start_recording_timers(
-        self, max_seconds: int, target_window: int
+        self,
+        max_seconds: int,
+        target_window: int,
+        preview_interval_ms: int,
     ) -> None: ...
 
     def stop_recording_timers(self) -> None: ...
@@ -137,6 +140,7 @@ class AppController:
         self._view.start_recording_timers(
             self._settings.max_recording_seconds,
             target_window,
+            self._settings.preview_interval_ms,
         )
 
     def request_preview(self) -> None:

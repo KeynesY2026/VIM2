@@ -98,6 +98,7 @@ def test_fast_model_loads_local_fp16_weights(tmp_path: Path) -> None:
             {
                 "device_map": "cuda:0",
                 "dtype": "float16",
+                "attn_implementation": "sdpa",
                 "max_inference_batch_size": 1,
                 "max_new_tokens": 512,
             },

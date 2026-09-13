@@ -382,7 +382,7 @@ class DesktopView:
         self._target_window: int | None = None
         self._latest_preview = ""
         self._preview_timer = QTimer()
-        self._preview_timer.setInterval(250)
+        self._preview_timer.setInterval(1_000)
         self._preview_timer.timeout.connect(self._on_preview_tick)
         self._max_timer = QTimer()
         self._max_timer.setSingleShot(True)
@@ -442,13 +442,17 @@ class DesktopView:
             self.overlay.fade_out()
 
     def start_recording_timers(
-        self, max_seconds: int, target_window: int
+        self,
+        max_seconds: int,
+        target_window: int,
+        preview_interval_ms: int,
     ) -> None:
         self._target_window = target_window
         self._latest_preview = ""
         self._error_hide_timer.stop()
         self.overlay.set_recording(preview="")
         self.overlay.show_for_window(target_window)
+        self._preview_timer.setInterval(preview_interval_ms)
         self._preview_timer.start()
         self._max_timer.start(max_seconds * 1000)
 

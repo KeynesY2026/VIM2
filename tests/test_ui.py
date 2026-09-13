@@ -135,7 +135,11 @@ def test_overlay_retains_full_preview_while_showing_tail() -> None:
 def test_live_transcribing_updates_intermediate_preview() -> None:
     _app()
     view = DesktopView()
-    view.start_recording_timers(max_seconds=90, target_window=123)
+    view.start_recording_timers(
+        max_seconds=90,
+        target_window=123,
+        preview_interval_ms=1_000,
+    )
     view.render_state(AppState.LIVE_TRANSCRIBING, model_id=ModelId.FAST)
 
     view.show_preview("实时转录结果")
@@ -148,7 +152,11 @@ def test_live_transcribing_updates_intermediate_preview() -> None:
 def test_finalizing_shows_recognizing_state_with_latest_preview() -> None:
     _app()
     view = DesktopView()
-    view.start_recording_timers(max_seconds=90, target_window=123)
+    view.start_recording_timers(
+        max_seconds=90,
+        target_window=123,
+        preview_interval_ms=1_000,
+    )
     view.show_preview("这是最新识别出来的文字")
 
     view.render_state(AppState.FINALIZING, model_id=ModelId.FAST)
@@ -184,11 +192,17 @@ def test_tray_menu_reflects_state_and_selected_model() -> None:
     assert not view.fast_model_action.isEnabled()
 
 
-def test_live_preview_timer_runs_every_250_milliseconds() -> None:
+def test_live_preview_timer_uses_configured_interval() -> None:
     _app()
     view = DesktopView()
 
-    assert view._preview_timer.interval() == 250
+    view.start_recording_timers(
+        max_seconds=90,
+        target_window=123,
+        preview_interval_ms=500,
+    )
+
+    assert view._preview_timer.interval() == 500
 
 
 def test_error_overlay_stays_for_ten_seconds_then_fades() -> None:

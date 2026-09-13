@@ -1,4 +1,5 @@
 {
   "max_recording_seconds": 90,
+  "preview_interval_ms": 1000,
   "selected_model": "qwen3-asr-0.6b-fp16"
 }

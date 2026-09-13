@@ -5,7 +5,11 @@ import pytest
 
 from vim2.audio import AudioArtifact
 from vim2.models import ModelId
-from vim2.session import FinalRecognitionError, VoiceSession
+from vim2.session import (
+    MAX_PREVIEW_SECONDS,
+    FinalRecognitionError,
+    VoiceSession,
+)
 from vim2.state import AppState, StateMachine
 
 
@@ -202,6 +206,62 @@ def test_live_preview_uses_selected_model_and_keeps_recording(
     assert session.state is AppState.RECORDING
 
 
+def test_long_live_preview_only_transcribes_bounded_recent_audio(
+    tmp_path: Path,
+) -> None:
+    artifact = _long_artifact(tmp_path)
+    recorder = FakeRecorder(artifact)
+    recorder.snapshots = [
+        AudioArtifact(np.zeros(640_000, dtype=np.float32), 16_000)
+    ]
+    recognizer = FakeRecognizer(["最近的文本", "完整文本"])
+    session = VoiceSession(
+        _ready_machine(), recorder, recognizer, FakePaster()
+    )
+    session.start(target_window=7, model_id=ModelId.ACCURATE)
+
+    assert session.preview() == "最近的文本"
+
+    complete, start_frame, window = recorder.slices[0]
+    assert complete.frame_count == 656_000
+    assert start_frame == complete.frame_count - (
+        complete.sample_rate * MAX_PREVIEW_SECONDS
+    )
+    assert window.duration_seconds == MAX_PREVIEW_SECONDS
+    assert recognizer.calls == [(window, ModelId.ACCURATE)]
+    assert window in recorder.discarded
+    assert complete in recorder.discarded
+    assert session.stop() == "完整文本"
+    assert recognizer.calls[-1] == (artifact, ModelId.ACCURATE)
+
+
+def test_bounded_preview_merges_an_exact_stable_sentence_anchor(
+    tmp_path: Path,
+) -> None:
+    artifact = _long_artifact(tmp_path)
+    recorder = FakeRecorder(artifact)
+    recorder.snapshots = [
+        AudioArtifact(np.zeros(144_000, dtype=np.float32), 16_000),
+    ]
+    recognizer = FakeRecognizer(
+        [
+            "第一句。未完成",
+            "第一句。变化",
+            "第一句。继续",
+            "第一句。第二句。",
+        ]
+    )
+    session = VoiceSession(
+        _ready_machine(), recorder, recognizer, FakePaster()
+    )
+    session.start(target_window=7, model_id=ModelId.FAST)
+    for _ in range(3):
+        session.preview()
+
+    assert session.preview() == "第一句。第二句。"
+    assert recognizer.calls[-1][0].duration_seconds == MAX_PREVIEW_SECONDS
+
+
 def test_stop_after_live_preview_transcribes_complete_recording(
     tmp_path: Path,
 ) -> None:
@@ -223,8 +283,9 @@ def test_stop_after_live_preview_transcribes_complete_recording(
 
 
 def test_stable_prefix_uses_overlapped_tail_for_final_result(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ) -> None:
+    monkeypatch.setattr("vim2.session.MAX_PREVIEW_SECONDS", 90)
     artifact = _long_artifact(tmp_path)
     recorder = FakeRecorder(artifact)
     recorder.snapshots = [
@@ -243,7 +304,7 @@ def test_stable_prefix_uses_overlapped_tail_for_final_result(
     result = session.stop()
 
     assert result == "第一句。最后一段。"
-    complete, start_frame, tail = recorder.slices[0]
+    complete, start_frame, tail = recorder.slices[-1]
     assert complete == artifact
     assert start_frame == 560_000
     assert recognizer.calls[-1] == (tail, ModelId.FAST)
@@ -257,8 +318,9 @@ def test_stable_prefix_uses_overlapped_tail_for_final_result(
     ["没有锚点。", "第一句。中间。第一句。结尾。", "   "],
 )
 def test_unusable_tail_falls_back_to_complete_recording(
-    tmp_path: Path, tail_response: str
+    tmp_path: Path, tail_response: str, monkeypatch
 ) -> None:
+    monkeypatch.setattr("vim2.session.MAX_PREVIEW_SECONDS", 90)
     artifact = _long_artifact(tmp_path)
     recorder = FakeRecorder(artifact)
     recorder.snapshots = [
@@ -281,7 +343,7 @@ def test_unusable_tail_falls_back_to_complete_recording(
 
     result = session.stop()
 
-    tail = recorder.slices[0][2]
+    tail = recorder.slices[-1][2]
     assert result == "第一句。完整尾段。"
     assert recognizer.calls[-2:] == [
         (tail, ModelId.FAST),
@@ -293,8 +355,9 @@ def test_unusable_tail_falls_back_to_complete_recording(
 
 
 def test_tail_recognition_error_falls_back_to_complete_recording(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ) -> None:
+    monkeypatch.setattr("vim2.session.MAX_PREVIEW_SECONDS", 90)
     artifact = _long_artifact(tmp_path)
     recorder = FakeRecorder(artifact)
     recorder.snapshots = [
@@ -318,7 +381,7 @@ def test_tail_recognition_error_falls_back_to_complete_recording(
 
     result = session.stop()
 
-    tail = recorder.slices[0][2]
+    tail = recorder.slices[-1][2]
     assert result == "第一句。完整尾段。"
     assert recognizer.calls[-2:] == [
         (tail, ModelId.FAST),
@@ -339,11 +402,11 @@ def test_tail_recognition_error_falls_back_to_complete_recording(
     ],
 )
 def test_tail_slice_error_falls_back_to_complete_recording(
-    tmp_path: Path, slice_error: Exception
+    tmp_path: Path, slice_error: Exception, monkeypatch
 ) -> None:
+    monkeypatch.setattr("vim2.session.MAX_PREVIEW_SECONDS", 90)
     artifact = _long_artifact(tmp_path)
     recorder = FakeRecorder(artifact)
-    recorder.slice_error = slice_error
     recorder.snapshots = [
         AudioArtifact(np.zeros(640_000, dtype=np.float32), 16_000)
     ]
@@ -360,6 +423,7 @@ def test_tail_slice_error_falls_back_to_complete_recording(
     session.start(target_window=7, model_id=ModelId.FAST)
     for _ in range(3):
         session.preview()
+    recorder.slice_error = slice_error
 
     result = session.stop()
 
@@ -371,8 +435,9 @@ def test_tail_slice_error_falls_back_to_complete_recording(
 
 
 def test_failed_tail_and_full_recognition_retries_complete_recording(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ) -> None:
+    monkeypatch.setattr("vim2.session.MAX_PREVIEW_SECONDS", 90)
     artifact = _long_artifact(tmp_path)
     recorder = FakeRecorder(artifact)
     recorder.snapshots = [
@@ -397,7 +462,7 @@ def test_failed_tail_and_full_recognition_retries_complete_recording(
     with pytest.raises(FinalRecognitionError, match="full failed"):
         session.stop()
 
-    tail = recorder.slices[0][2]
+    tail = recorder.slices[-1][2]
     assert tail in recorder.discarded
     assert artifact not in recorder.discarded
     assert session.state is AppState.RETRY_PENDING
@@ -410,8 +475,9 @@ def test_failed_tail_and_full_recognition_retries_complete_recording(
 
 
 def test_cancel_after_optimized_finalization_failure_cleans_audio(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ) -> None:
+    monkeypatch.setattr("vim2.session.MAX_PREVIEW_SECONDS", 90)
     artifact = _long_artifact(tmp_path)
     recorder = FakeRecorder(artifact)
     recorder.snapshots = [
@@ -435,7 +501,7 @@ def test_cancel_after_optimized_finalization_failure_cleans_audio(
     with pytest.raises(FinalRecognitionError, match="full failed"):
         session.stop()
 
-    tail = recorder.slices[0][2]
+    tail = recorder.slices[-1][2]
     session.cancel()
 
     assert tail in recorder.discarded
@@ -444,8 +510,9 @@ def test_cancel_after_optimized_finalization_failure_cleans_audio(
 
 
 def test_shutdown_after_optimized_finalization_failure_cleans_audio(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ) -> None:
+    monkeypatch.setattr("vim2.session.MAX_PREVIEW_SECONDS", 90)
     artifact = _long_artifact(tmp_path)
     recorder = FakeRecorder(artifact)
     recorder.snapshots = [
@@ -469,7 +536,7 @@ def test_shutdown_after_optimized_finalization_failure_cleans_audio(
     with pytest.raises(FinalRecognitionError, match="full failed"):
         session.stop()
 
-    tail = recorder.slices[0][2]
+    tail = recorder.slices[-1][2]
     session.shutdown()
 
     assert tail in recorder.discarded
@@ -477,8 +544,9 @@ def test_shutdown_after_optimized_finalization_failure_cleans_audio(
 
 
 def test_tail_over_ratio_limit_uses_complete_recording(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ) -> None:
+    monkeypatch.setattr("vim2.session.MAX_PREVIEW_SECONDS", 90)
     artifact = AudioArtifact(np.zeros(320_000, dtype=np.float32), 16_000)
     recorder = FakeRecorder(artifact)
     recorder.snapshots = [
@@ -495,7 +563,7 @@ def test_tail_over_ratio_limit_uses_complete_recording(
         session.preview()
 
     assert session.stop() == "完整结果。"
-    assert recorder.slices == []
+    assert all(source is not artifact for source, _, _ in recorder.slices)
     assert recognizer.calls[-1] == (artifact, ModelId.FAST)
 
 

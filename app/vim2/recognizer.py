@@ -60,6 +60,7 @@ class QwenRecognizer:
             kwargs: dict[str, object] = {
                 "device_map": "cuda:0",
                 "dtype": self._torch.float16,
+                "attn_implementation": "sdpa",
                 "max_inference_batch_size": 1,
                 "max_new_tokens": 512,
             }
