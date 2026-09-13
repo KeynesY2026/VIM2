@@ -152,9 +152,15 @@ class AudioRecorder:
 
         self._temp_dir.mkdir(parents=True, exist_ok=True)
         path = self._temp_dir / f"tail-{uuid.uuid4().hex}.wav"
-        with wave.open(str(path), "wb") as tail:
-            tail.setparams(params)
-            tail.writeframes(frames)
+        completed = False
+        try:
+            with wave.open(str(path), "wb") as tail:
+                tail.setparams(params)
+                tail.writeframes(frames)
+            completed = True
+        finally:
+            if not completed:
+                path.unlink(missing_ok=True)
 
         return AudioArtifact(
             path=path,

@@ -168,3 +168,35 @@ def test_slice_from_rejects_frame_outside_recording(
 
     with pytest.raises(ValueError, match="existing audio frame"):
         recorder.slice_from(artifact, 1)
+
+
+def test_slice_from_deletes_partial_output_when_creation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_path = tmp_path / "recording.wav"
+    with wave.open(str(artifact_path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16_000)
+        wav.writeframes(b"\x00\x00\x01\x00")
+    recorder = AudioRecorder(tmp_path, sounddevice=FakeSoundDevice())
+    artifact = AudioArtifact(artifact_path, 2, 16_000)
+    real_wave_open = wave.open
+    partial_paths: list[Path] = []
+
+    def fail_tail_creation(path: str, mode: str):
+        output_path = Path(path)
+        if mode == "wb" and output_path.name.startswith("tail-"):
+            output_path.write_bytes(b"partial")
+            partial_paths.append(output_path)
+            raise OSError("cannot create tail")
+        return real_wave_open(path, mode)
+
+    monkeypatch.setattr(wave, "open", fail_tail_creation)
+
+    with pytest.raises(OSError, match="cannot create tail"):
+        recorder.slice_from(artifact, 1)
+
+    assert len(partial_paths) == 1
+    assert not partial_paths[0].exists()
+    assert artifact_path.exists()

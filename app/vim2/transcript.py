@@ -71,10 +71,16 @@ def _complete_prefix(text: str) -> str:
 
 
 def _last_sentence(prefix: str) -> str:
+    terminator_start = len(prefix)
+    while (
+        terminator_start > 0
+        and prefix[terminator_start - 1] in SENTENCE_ENDINGS
+    ):
+        terminator_start -= 1
     previous_ending = max(
         (
             index
-            for index, character in enumerate(prefix[:-1])
+            for index, character in enumerate(prefix[:terminator_start])
             if character in SENTENCE_ENDINGS
         ),
         default=-1,

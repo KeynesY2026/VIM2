@@ -1,3 +1,5 @@
+import pytest
+
 from vim2.transcript import (
     StableCheckpoint,
     StablePrefixTracker,
@@ -80,3 +82,33 @@ def test_missing_or_repeated_anchor_requires_fallback() -> None:
         checkpoint, "第一句。中间。第一句。结尾。"
     ) is None
     assert merge_stable_tail(checkpoint, "   ") is None
+
+
+@pytest.mark.parametrize(
+    ("prefix", "tail", "expected"),
+    [
+        (
+            "Earlier. What?!",
+            "Noise?! What?! Next.",
+            "Earlier. What?! Next.",
+        ),
+        (
+            "前句。真的吗？！",
+            "噪声？！真的吗？！后续。",
+            "前句。真的吗？！后续。",
+        ),
+    ],
+)
+def test_terminal_punctuation_run_is_part_of_full_anchor(
+    prefix: str, tail: str, expected: str
+) -> None:
+    tracker = StablePrefixTracker()
+    for frame_count in (16_000, 32_000, 48_000):
+        tracker.observe(prefix, frame_count)
+
+    checkpoint = tracker.checkpoint
+    assert checkpoint is not None
+    assert checkpoint.anchor == prefix.removeprefix(
+        "Earlier. " if prefix.startswith("Earlier") else "前句。"
+    )
+    assert merge_stable_tail(checkpoint, tail) == expected

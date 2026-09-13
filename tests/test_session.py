@@ -14,6 +14,7 @@ class FakeRecorder:
         self.started = False
         self.discarded: list[AudioArtifact] = []
         self.stop_error: Exception | None = None
+        self.slice_error: Exception | None = None
         self.snapshots: list[AudioArtifact] = []
         self.slices: list[tuple[AudioArtifact, int, AudioArtifact]] = []
 
@@ -45,6 +46,8 @@ class FakeRecorder:
     def slice_from(
         self, artifact: AudioArtifact, start_frame: int
     ) -> AudioArtifact:
+        if self.slice_error:
+            raise self.slice_error
         tail = AudioArtifact(
             path=artifact.path.with_name("tail.wav"),
             frame_count=artifact.frame_count - start_frame,
@@ -324,6 +327,48 @@ def test_tail_recognition_error_falls_back_to_complete_recording(
     assert paster.calls == [("第一句。完整尾段。", 7)]
     assert not tail.path.exists()
     assert not artifact.path.exists()
+
+
+@pytest.mark.parametrize(
+    "slice_error",
+    [
+        OSError("slice failed"),
+        RuntimeError("slice failed"),
+        ValueError("slice failed"),
+        MemoryError("slice failed"),
+    ],
+)
+def test_tail_slice_error_falls_back_to_complete_recording(
+    tmp_path: Path, slice_error: Exception
+) -> None:
+    artifact = _long_artifact(tmp_path)
+    recorder = FakeRecorder(artifact)
+    recorder.slice_error = slice_error
+    recorder.snapshots = [
+        AudioArtifact(tmp_path / "seed.wav", 640_000, 16_000)
+    ]
+    recognizer = FakeRecognizer(
+        [
+            "第一句。未完成",
+            "第一句。变化",
+            "第一句。继续",
+            "第一句。完整尾段。",
+        ]
+    )
+    paster = FakePaster()
+    session = VoiceSession(_ready_machine(), recorder, recognizer, paster)
+    session.start(target_window=7, model_id=ModelId.FAST)
+    for _ in range(3):
+        session.preview()
+
+    result = session.stop()
+
+    assert result == "第一句。完整尾段。"
+    assert recognizer.calls[-1] == (artifact.path, ModelId.FAST)
+    assert paster.calls == [("第一句。完整尾段。", 7)]
+    assert artifact in recorder.discarded
+    assert not artifact.path.exists()
+    assert session.state is AppState.READY
 
 
 def test_failed_tail_and_full_recognition_retries_complete_recording(

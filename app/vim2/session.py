@@ -163,14 +163,16 @@ class VoiceSession:
         checkpoint: StableCheckpoint,
         start_frame: int,
     ) -> str | None:
-        tail = self._recorder.slice_from(artifact, start_frame)
+        tail: AudioArtifact | None = None
         try:
+            tail = self._recorder.slice_from(artifact, start_frame)
             text = self._recognizer.transcribe(tail.path, model_id).strip()
             return merge_stable_tail(checkpoint, text)
         except RECOGNITION_ERRORS:
             return None
         finally:
-            self._recorder.discard(tail)
+            if tail is not None:
+                self._recorder.discard(tail)
 
     def _complete(self, text: str) -> str:
         if self._pending_audio is None or self._target_window is None:
