@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from ctypes import wintypes
 from typing import Callable
 
+VIM2_INPUT_MARKER = 0x56494D32
+
 _GENERIC_MODIFIERS = {
     "Ctrl": frozenset({"LeftCtrl", "RightCtrl"}),
     "Alt": frozenset({"LeftAlt", "RightAlt"}),
@@ -192,8 +194,14 @@ class HotkeyDispatcher:
         self._released = threading.Event()
         self._released.set()
 
-    def process(self, event: KeyEvent, *, injected: bool) -> bool:
-        if injected:
+    def process(
+        self,
+        event: KeyEvent,
+        *,
+        lower_integrity_injected: bool,
+        vim2_injected: bool,
+    ) -> bool:
+        if lower_integrity_injected or vim2_injected:
             return False
         if event.key == "Esc" and event.is_down and self._is_cancellable():
             self._on_cancel()
@@ -228,7 +236,7 @@ class WindowsHotkeyListener:
     _WM_SYSKEYDOWN = 0x0104
     _WM_SYSKEYUP = 0x0105
     _WM_QUIT = 0x0012
-    _LLKHF_INJECTED = 0x10
+    _LLKHF_LOWER_IL_INJECTED = 0x02
 
     def __init__(self, dispatcher: HotkeyDispatcher) -> None:
         self._dispatcher = dispatcher
@@ -302,9 +310,15 @@ class WindowsHotkeyListener:
                         self._WM_KEYDOWN,
                         self._WM_SYSKEYDOWN,
                     )
-                    injected = bool(data.flags & self._LLKHF_INJECTED)
+                    lower_integrity_injected = bool(
+                        data.flags & self._LLKHF_LOWER_IL_INJECTED
+                    )
                     if self._dispatcher.process(
-                        KeyEvent(key, is_down), injected=injected
+                        KeyEvent(key, is_down),
+                        lower_integrity_injected=lower_integrity_injected,
+                        vim2_injected=(
+                            data.dwExtraInfo == VIM2_INPUT_MARKER
+                        ),
                     ):
                         return 1
             return user32.CallNextHookEx(None, code, message, data_address)

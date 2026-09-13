@@ -5,6 +5,8 @@ import time
 from ctypes import wintypes
 from typing import Callable, Protocol
 
+from vim2.hotkey import VIM2_INPUT_MARKER
+
 CF_UNICODETEXT = 13
 GHND = 0x0042
 INPUT_KEYBOARD = 1
@@ -15,6 +17,7 @@ VK_ESCAPE = 0x1B
 GUI_INMENUMODE = 0x00000004
 GUI_SYSTEMMENUMODE = 0x00000008
 GUI_POPUPMENUMODE = 0x00000010
+CLIPBOARD_SYNC_DELAY_SECONDS = 0.3
 
 
 class ClipboardPasteError(RuntimeError):
@@ -27,6 +30,8 @@ class WindowsApi(Protocol):
     def set_foreground_window(self, handle: int) -> bool: ...
 
     def exit_menu_mode(self, handle: int) -> None: ...
+
+    def wait_for_clipboard_sync(self) -> None: ...
 
     def send_ctrl_v(self) -> bool: ...
 
@@ -256,6 +261,9 @@ class NativeWindowsApi:
             )
         )
 
+    def wait_for_clipboard_sync(self) -> None:
+        time.sleep(CLIPBOARD_SYNC_DELAY_SECONDS)
+
     def _send_keys(self, keys: tuple[_Input, ...]) -> bool:
         events = (_Input * len(keys))(*keys)
         return self._user32.SendInput(
@@ -272,7 +280,7 @@ class NativeWindowsApi:
                     wScan=0,
                     dwFlags=flags,
                     time=0,
-                    dwExtraInfo=0,
+                    dwExtraInfo=VIM2_INPUT_MARKER,
                 )
             ),
         )
@@ -302,6 +310,7 @@ class WindowsClipboardPaster:
                 "in the clipboard."
             )
         self._api.exit_menu_mode(target_window)
+        self._api.wait_for_clipboard_sync()
         if not self._api.send_ctrl_v():
             raise ClipboardPasteError(
                 "Cannot send Ctrl+V; recognized text remains in the clipboard."

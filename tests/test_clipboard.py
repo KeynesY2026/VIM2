@@ -4,9 +4,13 @@ import pytest
 
 from vim2.clipboard import (
     ClipboardPasteError,
+    NativeWindowsApi,
+    VK_CONTROL,
     WindowsClipboardPaster,
     _Input,
 )
+
+VIM2_INPUT_MARKER = 0x56494D32
 
 
 class FakeWindowsApi:
@@ -31,6 +35,9 @@ class FakeWindowsApi:
     def exit_menu_mode(self, handle: int) -> None:
         self.calls.append(("menu", handle))
 
+    def wait_for_clipboard_sync(self) -> None:
+        self.calls.append(("clipboard_sync", None))
+
 
 def test_paste_waits_for_hotkey_release_and_targets_original_window() -> None:
     api = FakeWindowsApi()
@@ -47,6 +54,7 @@ def test_paste_waits_for_hotkey_release_and_targets_original_window() -> None:
         ("clipboard", "Unicode 文本"),
         ("foreground", 123),
         ("menu", 123),
+        ("clipboard_sync", None),
         ("ctrl_v", None),
     ]
 
@@ -80,3 +88,9 @@ def test_send_input_structure_matches_native_windows_abi() -> None:
     expected_size = 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28
 
     assert ctypes.sizeof(_Input) == expected_size
+
+
+def test_generated_key_events_are_marked_as_vim2_input() -> None:
+    event = NativeWindowsApi._key_event(VK_CONTROL, 0)
+
+    assert event.ki.dwExtraInfo == VIM2_INPUT_MARKER

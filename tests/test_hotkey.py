@@ -66,7 +66,7 @@ def test_semantically_duplicate_aliases_are_collapsed() -> None:
     assert parse_hotkey("Ctrl+Control+K").keys == ("Ctrl", "K")
 
 
-def test_dispatcher_handles_toggle_cancel_and_injected_input() -> None:
+def test_dispatcher_allows_rdp_input_but_rejects_lower_integrity_injection() -> None:
     actions: list[str] = []
     dispatcher = HotkeyDispatcher(
         parse_hotkey("RightAlt"),
@@ -75,9 +75,31 @@ def test_dispatcher_handles_toggle_cancel_and_injected_input() -> None:
         is_cancellable=lambda: True,
     )
 
-    assert dispatcher.process(KeyEvent("RightAlt", True), injected=True) is False
-    assert dispatcher.process(KeyEvent("RightAlt", True), injected=False) is True
-    assert dispatcher.process(KeyEvent("Esc", True), injected=False) is True
+    assert dispatcher.process(
+        KeyEvent("RightAlt", True),
+        lower_integrity_injected=False,
+        vim2_injected=False,
+    ) is True
+    assert dispatcher.process(
+        KeyEvent("RightAlt", False),
+        lower_integrity_injected=False,
+        vim2_injected=False,
+    ) is True
+    assert dispatcher.process(
+        KeyEvent("RightAlt", True),
+        lower_integrity_injected=True,
+        vim2_injected=False,
+    ) is False
+    assert dispatcher.process(
+        KeyEvent("RightAlt", True),
+        lower_integrity_injected=False,
+        vim2_injected=True,
+    ) is False
+    assert dispatcher.process(
+        KeyEvent("Esc", True),
+        lower_integrity_injected=False,
+        vim2_injected=False,
+    ) is True
 
     assert actions == ["toggle", "cancel"]
 
