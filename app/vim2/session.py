@@ -6,6 +6,14 @@ from typing import Protocol
 from vim2.audio import AudioArtifact
 from vim2.models import ModelId
 from vim2.state import AppState, StateMachine
+from vim2.transcript import (
+    StableCheckpoint,
+    StablePrefixTracker,
+    merge_stable_tail,
+)
+
+TAIL_OVERLAP_SECONDS = 8
+MAX_TAIL_RATIO = 0.70
 
 
 class Recorder(Protocol):
@@ -14,6 +22,10 @@ class Recorder(Protocol):
     def stop(self) -> AudioArtifact: ...
 
     def snapshot(self) -> AudioArtifact: ...
+
+    def slice_from(
+        self, artifact: AudioArtifact, start_frame: int
+    ) -> AudioArtifact: ...
 
     def cancel(self) -> None: ...
 
@@ -49,6 +61,7 @@ class VoiceSession:
         self._pending_audio: AudioArtifact | None = None
         self._warnings: tuple[str, ...] = ()
         self._shutting_down = False
+        self._stable_prefix = StablePrefixTracker()
 
     @property
     def state(self) -> AppState:
@@ -62,6 +75,7 @@ class VoiceSession:
         if self.state is not AppState.READY:
             raise RuntimeError(f"Cannot start recording while {self.state.value}")
         self._recorder.start()
+        self._stable_prefix.reset()
         self._target_window = target_window
         self._model_id = model_id
         self._warnings = ()
@@ -78,13 +92,13 @@ class VoiceSession:
         self._pending_audio = artifact
         self._warnings = artifact.warnings
         self._machine.transition_to(AppState.FINALIZING)
-        return self._recognize_pending()
+        return self._recognize_pending(allow_tail=True)
 
     def retry(self) -> str:
         if self.state is not AppState.RETRY_PENDING:
             raise RuntimeError("There is no failed recognition to retry")
         self._machine.transition_to(AppState.FINALIZING)
-        return self._recognize_pending()
+        return self._recognize_pending(allow_tail=False)
 
     def preview(self) -> str:
         if self.state is not AppState.RECORDING or self._model_id is None:
@@ -95,13 +109,14 @@ class VoiceSession:
             text = self._recognizer.transcribe(
                 artifact.path, self._model_id
             ).strip()
+            self._stable_prefix.observe(text, artifact.frame_count)
             return text
         finally:
             self._recorder.discard(artifact)
             if not self._shutting_down:
                 self._machine.transition_to(AppState.RECORDING)
 
-    def _recognize_pending(self) -> str:
+    def _recognize_pending(self, *, allow_tail: bool) -> str:
         if (
             self._pending_audio is None
             or self._model_id is None
@@ -109,14 +124,50 @@ class VoiceSession:
         ):
             raise RuntimeError("Recognition session data is incomplete")
         try:
-            text = self._recognizer.transcribe(
-                self._pending_audio.path, self._model_id
-            ).strip()
+            text = self._recognize_final(
+                self._pending_audio,
+                self._model_id,
+                allow_tail=allow_tail,
+            )
         except (OSError, RuntimeError, ValueError, MemoryError) as exc:
             self._machine.transition_to(AppState.RETRY_PENDING)
             raise FinalRecognitionError(str(exc)) from exc
 
         return self._complete(text)
+
+    def _recognize_final(
+        self,
+        artifact: AudioArtifact,
+        model_id: ModelId,
+        *,
+        allow_tail: bool,
+    ) -> str:
+        checkpoint = self._stable_prefix.checkpoint
+        if allow_tail and checkpoint is not None:
+            overlap_frames = artifact.sample_rate * TAIL_OVERLAP_SECONDS
+            start_frame = max(0, checkpoint.frame_count - overlap_frames)
+            tail_frames = artifact.frame_count - start_frame
+            if tail_frames <= artifact.frame_count * MAX_TAIL_RATIO:
+                merged = self._recognize_tail(
+                    artifact, model_id, checkpoint, start_frame
+                )
+                if merged is not None:
+                    return merged
+        return self._recognizer.transcribe(artifact.path, model_id).strip()
+
+    def _recognize_tail(
+        self,
+        artifact: AudioArtifact,
+        model_id: ModelId,
+        checkpoint: StableCheckpoint,
+        start_frame: int,
+    ) -> str | None:
+        tail = self._recorder.slice_from(artifact, start_frame)
+        try:
+            text = self._recognizer.transcribe(tail.path, model_id).strip()
+            return merge_stable_tail(checkpoint, text)
+        finally:
+            self._recorder.discard(tail)
 
     def _complete(self, text: str) -> str:
         if self._pending_audio is None or self._target_window is None:

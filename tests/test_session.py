@@ -14,6 +14,8 @@ class FakeRecorder:
         self.started = False
         self.discarded: list[AudioArtifact] = []
         self.stop_error: Exception | None = None
+        self.snapshots: list[AudioArtifact] = []
+        self.slices: list[tuple[AudioArtifact, int, AudioArtifact]] = []
 
     def start(self) -> None:
         self.started = True
@@ -24,13 +26,34 @@ class FakeRecorder:
         return self.artifact
 
     def snapshot(self) -> AudioArtifact:
+        frame_count = (
+            self.snapshots[-1].frame_count + 16_000
+            if self.snapshots
+            else 160_000
+        )
         snapshot = AudioArtifact(
-            path=self.artifact.path.with_name("preview.wav"),
-            frame_count=self.artifact.frame_count,
+            path=self.artifact.path.with_name(
+                f"preview-{len(self.snapshots)}.wav"
+            ),
+            frame_count=frame_count,
             sample_rate=self.artifact.sample_rate,
         )
         snapshot.path.write_bytes(b"preview")
+        self.snapshots.append(snapshot)
         return snapshot
+
+    def slice_from(
+        self, artifact: AudioArtifact, start_frame: int
+    ) -> AudioArtifact:
+        tail = AudioArtifact(
+            path=artifact.path.with_name("tail.wav"),
+            frame_count=artifact.frame_count - start_frame,
+            sample_rate=artifact.sample_rate,
+            warnings=artifact.warnings,
+        )
+        tail.path.write_bytes(b"tail")
+        self.slices.append((artifact, start_frame, tail))
+        return tail
 
     def cancel(self) -> None:
         self.started = False
@@ -72,6 +95,12 @@ def _artifact(tmp_path: Path) -> AudioArtifact:
     path = tmp_path / "recording.wav"
     path.write_bytes(b"audio")
     return AudioArtifact(path=path, frame_count=16_000, sample_rate=16_000)
+
+
+def _long_artifact(tmp_path: Path) -> AudioArtifact:
+    path = tmp_path / "recording.wav"
+    path.write_bytes(b"audio")
+    return AudioArtifact(path=path, frame_count=960_000, sample_rate=16_000)
 
 
 def test_final_recognition_uses_complete_recording_then_pastes_and_deletes(
@@ -188,6 +217,101 @@ def test_stop_after_live_preview_transcribes_complete_recording(
     assert recognizer.calls[-1] == (artifact.path, ModelId.FAST)
     assert len(recognizer.calls) == 2
     assert paster.calls == [("前半句和最后一段", 7)]
+
+
+def test_stable_prefix_uses_overlapped_tail_for_final_result(
+    tmp_path: Path,
+) -> None:
+    artifact = _long_artifact(tmp_path)
+    recorder = FakeRecorder(artifact)
+    recorder.snapshots = [
+        AudioArtifact(tmp_path / "seed.wav", 640_000, 16_000)
+    ]
+    recognizer = FakeRecognizer(
+        ["第一句。未完成", "第一句。变化", "第一句。继续", "第一句。最后一段。"]
+    )
+    paster = FakePaster()
+    session = VoiceSession(_ready_machine(), recorder, recognizer, paster)
+    session.start(target_window=7, model_id=ModelId.FAST)
+
+    assert session.preview() == "第一句。未完成"
+    assert session.preview() == "第一句。变化"
+    assert session.preview() == "第一句。继续"
+    result = session.stop()
+
+    assert result == "第一句。最后一段。"
+    complete, start_frame, tail = recorder.slices[0]
+    assert complete == artifact
+    assert start_frame == 560_000
+    assert recognizer.calls[-1] == (tail.path, ModelId.FAST)
+    assert paster.calls == [("第一句。最后一段。", 7)]
+    assert not tail.path.exists()
+    assert not artifact.path.exists()
+
+
+@pytest.mark.parametrize(
+    "tail_response",
+    ["没有锚点。", "第一句。中间。第一句。结尾。", "   "],
+)
+def test_unusable_tail_falls_back_to_complete_recording(
+    tmp_path: Path, tail_response: str
+) -> None:
+    artifact = _long_artifact(tmp_path)
+    recorder = FakeRecorder(artifact)
+    recorder.snapshots = [
+        AudioArtifact(tmp_path / "seed.wav", 640_000, 16_000)
+    ]
+    recognizer = FakeRecognizer(
+        [
+            "第一句。未完成",
+            "第一句。变化",
+            "第一句。继续",
+            tail_response,
+            "第一句。完整尾段。",
+        ]
+    )
+    paster = FakePaster()
+    session = VoiceSession(_ready_machine(), recorder, recognizer, paster)
+    session.start(target_window=7, model_id=ModelId.FAST)
+    for _ in range(3):
+        session.preview()
+
+    result = session.stop()
+
+    tail = recorder.slices[0][2]
+    assert result == "第一句。完整尾段。"
+    assert recognizer.calls[-2:] == [
+        (tail.path, ModelId.FAST),
+        (artifact.path, ModelId.FAST),
+    ]
+    assert paster.calls == [("第一句。完整尾段。", 7)]
+    assert not tail.path.exists()
+    assert not artifact.path.exists()
+
+
+def test_tail_over_ratio_limit_uses_complete_recording(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "recording.wav"
+    path.write_bytes(b"audio")
+    artifact = AudioArtifact(path, 320_000, 16_000)
+    recorder = FakeRecorder(artifact)
+    recorder.snapshots = [
+        AudioArtifact(tmp_path / "seed.wav", 160_000, 16_000)
+    ]
+    recognizer = FakeRecognizer(
+        ["第一句。未完成", "第一句。变化", "第一句。继续", "完整结果。"]
+    )
+    session = VoiceSession(
+        _ready_machine(), recorder, recognizer, FakePaster()
+    )
+    session.start(target_window=7, model_id=ModelId.FAST)
+    for _ in range(3):
+        session.preview()
+
+    assert session.stop() == "完整结果。"
+    assert recorder.slices == []
+    assert recognizer.calls[-1] == (artifact.path, ModelId.FAST)
 
 
 def test_stop_falls_back_to_full_audio_when_live_result_is_empty(
