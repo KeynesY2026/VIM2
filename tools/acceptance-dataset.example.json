@@ -1,0 +1,14 @@
+{
+  "version": "replace-with-frozen-dataset-version",
+  "samples": [
+    {
+      "audio": "audio/example.wav",
+      "reference": "请把 Kubernetes deployment 更新到三个副本",
+      "proper_nouns": [
+        "Kubernetes",
+        "deployment"
+      ],
+      "mixed": true
+    }
+  ]
+}

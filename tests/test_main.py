@@ -22,7 +22,13 @@ def test_check_mode_succeeds_for_complete_portable_layout(
     _create_minimal_model(tmp_path)
 
     exit_code = run(
-        ["--root", str(tmp_path), "--check", "--skip-cuda-check"]
+        [
+            "--root",
+            str(tmp_path),
+            "--check",
+            "--skip-cuda-check",
+            "--skip-runtime-check",
+        ]
     )
 
     assert exit_code == 0
@@ -31,7 +37,13 @@ def test_check_mode_succeeds_for_complete_portable_layout(
 
 def test_check_mode_prints_actionable_errors(tmp_path: Path, capsys) -> None:
     exit_code = run(
-        ["--root", str(tmp_path), "--check", "--skip-cuda-check"]
+        [
+            "--root",
+            str(tmp_path),
+            "--check",
+            "--skip-cuda-check",
+            "--skip-runtime-check",
+        ]
     )
 
     assert exit_code == 1

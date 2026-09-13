@@ -18,8 +18,17 @@
     }
   },
   "platform": {
-    "minimum_nvidia_driver": "570.00",
+    "minimum_nvidia_driver": "570.65",
     "python": ">=3.10,<3.14",
-    "verified_windows": []
+    "verified_windows": [
+      "Windows 11 x64"
+    ]
+  },
+  "runtime": {
+    "bitsandbytes": "0.48.2",
+    "PySide6": "6.10.0",
+    "qwen-asr": "0.0.6",
+    "torch": "2.11.0+cu128",
+    "transformers": "4.57.6"
   }
 }

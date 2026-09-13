@@ -28,6 +28,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--skip-runtime-check",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     return parser
 
 
@@ -43,6 +48,7 @@ def run(argv: Sequence[str] | None = None) -> int:
     result = PreflightChecker(paths).check(
         settings.selected_model,
         check_cuda=not args.skip_cuda_check,
+        check_runtime=not args.skip_runtime_check,
     )
     if not result.ok:
         details = "\n".join(f"- {error}" for error in result.errors)
