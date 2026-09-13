@@ -88,6 +88,18 @@ def _foreground_window() -> int:
     return int(user32.GetForegroundWindow() or 0)
 
 
+def _prepare_desktop_runtime(
+    app: QApplication,
+    view: DesktopView,
+    recognizer: QwenRecognizer,
+    controller: AppController,
+) -> None:
+    view.show()
+    app.processEvents()
+    recognizer.initialize_runtime()
+    controller.start()
+
+
 def run_qt_application(paths: AppPaths, settings: Settings) -> int:
     _enable_per_monitor_dpi()
     app = QApplication(sys.argv)
@@ -162,8 +174,7 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
         guard.close()
 
     app.aboutToQuit.connect(cleanup)
-    view.show()
-    controller.start()
+    _prepare_desktop_runtime(app, view, recognizer, controller)
     exit_code = app.exec()
     cleanup()
     return exit_code

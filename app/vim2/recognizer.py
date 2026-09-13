@@ -49,7 +49,7 @@ class QwenRecognizer:
                 raise RuntimeError(
                     "Unload the resident model before loading another model"
                 )
-            self._load_runtime()
+            self.initialize_runtime()
             if not self._torch.cuda.is_available():
                 raise RuntimeError(
                     "CUDA is unavailable; install a compatible NVIDIA driver "
@@ -72,7 +72,7 @@ class QwenRecognizer:
             )
             self._loaded_model = model_id
 
-    def _load_runtime(self) -> None:
+    def initialize_runtime(self) -> None:
         if self._torch is None:
             import torch
 

@@ -5,6 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
+import vim2.qt_runtime as qt_runtime
 from vim2.qt_runtime import QtTaskRunner
 
 
@@ -54,3 +55,37 @@ def test_qt_task_runner_surfaces_worker_error() -> None:
     assert results == []
     assert len(errors) == 1
     assert str(errors[0]) == "worker failed"
+
+
+def test_model_runtime_initializes_on_ui_thread_after_tray_is_visible() -> None:
+    events: list[str] = []
+
+    class App:
+        def processEvents(self) -> None:
+            events.append("events processed")
+
+    class View:
+        def show(self) -> None:
+            events.append("tray shown")
+
+    class Recognizer:
+        def initialize_runtime(self) -> None:
+            events.append("runtime initialized")
+
+    class Controller:
+        def start(self) -> None:
+            events.append("background model load started")
+
+    qt_runtime._prepare_desktop_runtime(
+        App(),
+        View(),
+        Recognizer(),
+        Controller(),
+    )
+
+    assert events == [
+        "tray shown",
+        "events processed",
+        "runtime initialized",
+        "background model load started",
+    ]
