@@ -110,7 +110,12 @@ class AppController:
         if self._operation_busy:
             return
         if self._preview_busy:
-            self._stop_requested = True
+            if not self._stop_requested:
+                self._stop_requested = True
+                self._view.stop_recording_timers()
+                self._view.render_state(
+                    AppState.FINALIZING, self.selected_model
+                )
             return
         if self.state is AppState.READY:
             self._start_recording()

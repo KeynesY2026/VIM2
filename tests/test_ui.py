@@ -3,6 +3,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -85,6 +86,24 @@ def test_overlay_paints_v1_translucent_background() -> None:
     assert background.alpha() >= 220
 
 
+def test_overlay_background_does_not_darken_when_children_repaint() -> None:
+    _app()
+    overlay = VoiceOverlay()
+    overlay.set_message("正在识别", "实时识别文字")
+    overlay._opacity.setOpacity(1.0)
+    image = QImage(
+        overlay.size(), QImage.Format.Format_ARGB32_Premultiplied
+    )
+    image.fill(Qt.GlobalColor.transparent)
+
+    overlay.render(image)
+    first_background = image.pixelColor(25, 16)
+    overlay.render(image)
+    second_background = image.pixelColor(25, 16)
+
+    assert second_background == first_background
+
+
 def test_recording_overlay_stays_compact_and_draws_red_dot() -> None:
     app = _app()
     overlay = VoiceOverlay()
@@ -113,7 +132,20 @@ def test_overlay_retains_full_preview_while_showing_tail() -> None:
     assert overlay._preview.alignment() & Qt.AlignmentFlag.AlignRight
 
 
-def test_finalizing_keeps_latest_recognition_visible() -> None:
+def test_live_transcribing_updates_intermediate_preview() -> None:
+    _app()
+    view = DesktopView()
+    view.start_recording_timers(max_seconds=90, target_window=123)
+    view.render_state(AppState.LIVE_TRANSCRIBING, model_id=ModelId.FAST)
+
+    view.show_preview("实时转录结果")
+
+    assert view.overlay.current_preview == "实时转录结果"
+    assert view.overlay.displayed_text == "实时转录结果"
+    assert view.overlay.status_text == "正在录音"
+
+
+def test_finalizing_shows_recognizing_state_with_latest_preview() -> None:
     _app()
     view = DesktopView()
     view.start_recording_timers(max_seconds=90, target_window=123)
@@ -121,9 +153,14 @@ def test_finalizing_keeps_latest_recognition_visible() -> None:
 
     view.render_state(AppState.FINALIZING, model_id=ModelId.FAST)
 
+    dot = view.overlay._dot.grab().toImage().pixelColor(5, 5)
+
     assert view.overlay.current_preview == "这是最新识别出来的文字"
     assert view.overlay.displayed_text == "这是最新识别出来的文字"
-    assert view.overlay.status_text == "正在录音"
+    assert view.overlay.status_text == "正在识别"
+    assert dot.red() >= 220
+    assert 150 <= dot.green() <= 210
+    assert dot.blue() < 80
 
 
 def test_tray_menu_reflects_state_and_selected_model() -> None:

@@ -246,6 +246,8 @@ def test_stop_requested_before_preview_worker_starts_is_serialized(
 
     controller.toggle_recording()
 
+    assert view.states[-1] is AppState.FINALIZING
+    assert view.timers_stopped == 1
     assert len(runner.tasks) == 1
     runner.complete_next()
     assert len(runner.tasks) == 1

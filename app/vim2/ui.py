@@ -262,6 +262,10 @@ class VoiceOverlay(QWidget):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_Source
+        )
+        painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
         painter.setBrush(QColor(25, 25, 32, 224))
         pen = painter.pen()
         pen.setColor(QColor(80, 80, 100, 80))
@@ -432,7 +436,7 @@ class DesktopView:
             )
             self.overlay.show_for_window()
         elif state is AppState.FINALIZING:
-            self.overlay.set_recording(preview=self._latest_preview)
+            self.overlay.set_message("正在识别", self._latest_preview)
             self.overlay.show_for_window(self._target_window)
         elif state is AppState.READY:
             self.overlay.fade_out()
