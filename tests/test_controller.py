@@ -18,6 +18,23 @@ class ImmediateRunner:
             on_success(result)
 
 
+class DeferredRunner:
+    def __init__(self) -> None:
+        self.tasks = []
+
+    def submit(self, work, on_success, on_error) -> None:
+        self.tasks.append((work, on_success, on_error))
+
+    def complete_next(self) -> None:
+        work, on_success, on_error = self.tasks.pop(0)
+        try:
+            result = work()
+        except (OSError, RuntimeError, ValueError, MemoryError) as exc:
+            on_error(exc)
+        else:
+            on_success(result)
+
+
 class FakeLifecycleRecognizer:
     def __init__(self, responses: list[str | Exception] | None = None) -> None:
         self.responses = responses or []
@@ -196,4 +213,38 @@ def test_model_switch_persists_only_after_success(tmp_path: Path) -> None:
     switching_index = view.states.index(AppState.MODEL_SWITCHING)
     assert view.rendered_models[switching_index] is ModelId.ACCURATE
     assert repository.saved[-1].selected_model is ModelId.ACCURATE
+    assert controller.state is AppState.READY
+
+
+def test_stop_requested_before_preview_worker_starts_is_serialized(
+    tmp_path: Path,
+) -> None:
+    controller, recognizer, recorder, paster, view, repository = _controller(
+        tmp_path, ["preview", "final"]
+    )
+    runner = DeferredRunner()
+    machine = StateMachine()
+    session = VoiceSession(machine, recorder, recognizer, paster)
+    controller = AppController(
+        machine=machine,
+        settings=Settings(),
+        settings_repository=repository,
+        recognizer=recognizer,
+        session=session,
+        view=view,
+        task_runner=runner,
+        foreground_window=lambda: 321,
+    )
+    controller.start()
+    runner.complete_next()
+    controller.toggle_recording()
+    controller.request_preview()
+
+    controller.toggle_recording()
+
+    assert len(runner.tasks) == 1
+    runner.complete_next()
+    assert len(runner.tasks) == 1
+    runner.complete_next()
+    assert paster.calls == [("final", 321)]
     assert controller.state is AppState.READY

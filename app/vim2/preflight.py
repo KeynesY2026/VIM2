@@ -64,7 +64,7 @@ class PreflightChecker:
             ):
                 if self._dependency_finder(module) is None:
                     errors.append(
-                        f"Portable runtime dependency is missing: {module}"
+                        f"Python dependency is missing: {module}"
                     )
 
         if check_cuda:

@@ -9,7 +9,8 @@ Qwen3-ASR 模型在 NVIDIA GPU 上离线识别，并通过系统剪贴板和
 - Python 3.10-3.13（当前验证版本：Python 3.13）
 - Windows 11 x64（Windows 10 x64 为目标支持平台）
 - NVIDIA GPU；CUDA 12.8 运行时所需最低驱动版本 570.65
-- 发布目录中已经准备好的 `runtime/site-packages` 和 `.models`
+- 已在全局 Python 环境安装 `requirements.lock` 中列出的依赖
+- 发布目录中已经准备好的 `.models`
 
 正常启动不联网、不安装依赖，也不使用用户目录中的 Hugging Face 缓存。
 
@@ -31,10 +32,19 @@ Qwen3-ASR 模型在 NVIDIA GPU 上离线识别，并通过系统剪贴板和
 powershell -ExecutionPolicy Bypass -File .\tools\prepare-release.ps1
 ```
 
-该脚本把锁定依赖安装到 `runtime/site-packages`。模型只会从需求文档指定
-的本机 Hugging Face snapshot 缓存复制；完整目标目录会跳过，不会覆盖，
-也不会移动或删除原缓存。脚本最后生成模型文件 SHA-256 清单
-`release-files.sha256.json`。
+该脚本只检查全局 Python 版本和依赖，不创建虚拟环境，也不在项目目录安装
+Python 包。模型只会从需求文档指定的本机 Hugging Face snapshot 缓存复制；
+完整目标目录会跳过，不会覆盖，也不会移动或删除原缓存。脚本最后生成模型
+文件 SHA-256 清单 `release-files.sha256.json`。
+
+如全局依赖尚未安装，可由用户显式执行：
+
+```powershell
+python -m pip install -r .\requirements.lock `
+  --extra-index-url https://download.pytorch.org/whl/cu128
+```
+
+该安装不是 `start.bat` 或应用启动流程的一部分。
 
 ## A/B 性能测试
 

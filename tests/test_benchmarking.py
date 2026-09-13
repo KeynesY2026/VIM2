@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 from vim2.benchmarking import (
@@ -8,6 +9,7 @@ from vim2.benchmarking import (
     run_model_processes,
     select_peak_vram,
     summarize_sample,
+    worker_environment,
 )
 from vim2.models import ModelId
 
@@ -96,3 +98,15 @@ def test_cuda_peak_is_used_when_nvidia_smi_has_no_process_sample() -> None:
 
     assert peak_mib == 1536
     assert method == "torch.cuda.max_memory_allocated"
+
+
+def test_worker_environment_includes_application_package(
+    tmp_path: Path,
+) -> None:
+    environment = worker_environment(
+        tmp_path, {"PYTHONPATH": "existing"}
+    )
+
+    assert environment["PYTHONPATH"] == (
+        f"{tmp_path.resolve() / 'app'}{os.pathsep}existing"
+    )

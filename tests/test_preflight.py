@@ -79,11 +79,11 @@ def test_preflight_reports_missing_portable_dependencies(
     result = checker.check(ModelId.FAST, check_cuda=False)
 
     assert result.errors == (
-        "Portable runtime dependency is missing: PySide6",
-        "Portable runtime dependency is missing: qwen_asr",
-        "Portable runtime dependency is missing: sounddevice",
-        "Portable runtime dependency is missing: bitsandbytes",
-        "Portable runtime dependency is missing: numpy",
-        "Portable runtime dependency is missing: soundfile",
-        "Portable runtime dependency is missing: transformers",
+        "Python dependency is missing: PySide6",
+        "Python dependency is missing: qwen_asr",
+        "Python dependency is missing: sounddevice",
+        "Python dependency is missing: bitsandbytes",
+        "Python dependency is missing: numpy",
+        "Python dependency is missing: soundfile",
+        "Python dependency is missing: transformers",
     )

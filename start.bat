@@ -16,13 +16,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
-set "PYTHONNOUSERSITE=1"
 set "HF_HUB_OFFLINE=1"
 set "TRANSFORMERS_OFFLINE=1"
-set "HF_HOME=%~dp0.runtime\huggingface"
-set "PYTHONPATH=%~dp0app;%~dp0runtime\site-packages"
+set "HF_HOME=%~dp0temp\huggingface"
+set "PYTHONPATH=%~dp0app"
 
-python -m vim2
+python -m vim2 %*
 if errorlevel 1 (
     echo.
     echo VIM2 stopped because startup or runtime validation failed.

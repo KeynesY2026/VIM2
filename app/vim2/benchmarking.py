@@ -121,13 +121,28 @@ class NvidiaSmiMonitor:
             self._stop.wait(self._interval_seconds)
 
 
-def _launch(command: list[str]) -> str:
+def worker_environment(
+    root: Path, base: dict[str, str] | None = None
+) -> dict[str, str]:
+    environment = dict(base if base is not None else os.environ)
+    app_path = str(root.resolve() / "app")
+    existing = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = (
+        f"{app_path}{os.pathsep}{existing}" if existing else app_path
+    )
+    environment["HF_HUB_OFFLINE"] = "1"
+    environment["TRANSFORMERS_OFFLINE"] = "1"
+    return environment
+
+
+def _launch(command: list[str], environment: dict[str, str]) -> str:
     completed = subprocess.run(
         command,
         check=False,
         capture_output=True,
         text=True,
         encoding="utf-8",
+        env=environment,
     )
     if completed.returncode:
         details = completed.stderr.strip() or completed.stdout.strip()
@@ -154,7 +169,7 @@ def run_model_processes(
     audio_paths: Iterable[Path],
     models: Iterable[ModelId],
     runs: int,
-    launcher: Callable[[list[str]], str] = _launch,
+    launcher: Callable[[list[str]], str] | None = None,
 ) -> list[dict[str, object]]:
     if runs < 1:
         raise ValueError("runs must be at least 1")
@@ -177,5 +192,10 @@ def run_model_processes(
             str(runs),
             *audio_arguments,
         ]
-        results.append(_parse_result(launcher(command)))
+        output = (
+            launcher(command)
+            if launcher is not None
+            else _launch(command, worker_environment(root))
+        )
+        results.append(_parse_result(output))
     return results

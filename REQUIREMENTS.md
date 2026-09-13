@@ -11,7 +11,7 @@ VIM2 是 VIM 第一版的后续版本。产品继续提供 Windows 全局语音�
 - 支持中文、英文及中英文混合语音，优先保证识别准确率。
 - 内置 Qwen3-ASR 0.6B FP16 和 Qwen3-ASR 1.7B INT8，允许用户按场景切换。
 - 所有语音识别均在本机执行，不上传音频或识别文本。
-- 除 Python 运行环境外，程序、依赖、配置和模型均从 Portable 目录运行。
+- 程序、配置和模型均从 Portable 目录运行；Python 及第三方包使用系统全局环境，不在项目目录中复制虚拟环境或依赖库。
 - 整个应用使用 Python 实现，通过 BAT 文件启动，不生成或依赖 EXE 程序。
 - 系统托盘图标、状态配色、悬浮窗视觉风格、位置和动画沿用 VIM 第一版。
 
@@ -21,7 +21,7 @@ VIM2 是 VIM 第一版的后续版本。产品继续提供 Windows 全局语音�
 - 两种模型的最终识别实时率均小于 1.0，即处理时间短于音频时长。
 - 中英混合输入必须达到本文档定义的 CER、WER 和专有名词正确率门槛。
 - 1.7B INT8 在中英混合、专有名词、长句或复杂语音测试集中应优于或至少不劣于 0.6B FP16。
-- 用户无需安装 .NET、CUDA Toolkit、FFmpeg 或单独配置模型缓存；仅要求系统预装兼容版本的 Python 和满足要求的 NVIDIA 驱动。
+- 用户无需安装 .NET、CUDA Toolkit、FFmpeg 或单独配置模型缓存；仅要求系统预装兼容版本的 Python、锁定版本的第三方包和满足要求的 NVIDIA 驱动。
 - 正式发布必须完成本文档第 6.5 节列出的全部范围。
 
 ### 1.3 非目标
@@ -217,9 +217,7 @@ VIM2/
 ├── start.bat
 ├── app/
 │   └── Python 应用代码
-├── runtime/
-│   ├── Python 依赖
-│   └── 本地推理组件
+├── requirements.lock
 ├── .models/
 │   ├── Qwen3-ASR-0.6B/
 │   └── Qwen3-ASR-1.7B-INT8/
@@ -239,13 +237,13 @@ VIM2/
   - `C:\Users\keynesy\.cache\huggingface\hub\models--Qwen--Qwen3-ASR-0.6B`，约 1.75 GB。
   - `C:\Users\keynesy\.cache\huggingface\hub\models--Qwen--Qwen3-ASR-1.7B`，约 4.38 GB。
 - 应从各模型 `snapshots\<revision>` 目录复制完整快照到对应的 Portable 模型目录；不得仅复制 Hugging Face 缓存中的单个 blob 文件。
-- 移动整个 VIM2 目录后，除 Python 安装路径外不需要重新配置。
+- 移动整个 VIM2 目录后，除全局 Python 环境及其第三方包外不需要重新配置。
 - 路径中包含空格或中文时必须正常运行。
 - 配置、日志和模型路径均应以应用目录为基准。
 - 发布说明必须列出支持的 Python 大版本、最低 NVIDIA 驱动版本和实际验证过的 Windows 版本。
 - `start.bat` 必须从自身所在目录解析所有相对路径，不得依赖用户当前工作目录。
 - `start.bat` 必须检查 Python 是否存在且版本兼容；检查失败时显示明确错误并保持窗口可见。
-- Python 第三方依赖必须随 Portable 目录交付，正常启动不得执行 `pip install`。
+- Python 第三方依赖使用全局 Python 环境，版本由根目录 `requirements.lock` 锁定；正常启动只验证依赖，不得执行 `pip install`。
 - 正式应用的业务逻辑、托盘、悬浮窗、全局热键、录音、模型管理和自动粘贴均使用 Python 实现。
 
 ### 4.4 离线与隐私

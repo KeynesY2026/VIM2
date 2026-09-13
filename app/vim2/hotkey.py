@@ -207,7 +207,7 @@ class HotkeyDispatcher:
             self._on_toggle()
         return decision.suppress
 
-    def wait_until_released(self, timeout: float = 0.3) -> None:
+    def wait_until_released(self, timeout: float | None = None) -> None:
         self._released.wait(timeout)
 
 
@@ -262,7 +262,7 @@ class WindowsHotkeyListener:
         self._thread = None
         self._thread_id = None
 
-    def wait_until_released(self, timeout: float = 0.3) -> None:
+    def wait_until_released(self, timeout: float | None = None) -> None:
         self._dispatcher.wait_until_released(timeout)
 
     def _message_loop(self) -> None:

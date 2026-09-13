@@ -4,38 +4,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
-$Runtime = Join-Path $Root "runtime\site-packages"
-$LockFile = Join-Path $Root "runtime\requirements.lock"
 
 & $Python -c "import sys; sys.exit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)"
 if ($LASTEXITCODE -ne 0) {
     throw "Python 3.10 through 3.13 is required."
 }
 
-$RequiredPackages = @(
-    "torch",
-    "qwen_asr",
-    "PySide6",
-    "sounddevice",
-    "bitsandbytes"
-)
-$RuntimeComplete = Test-Path -LiteralPath $Runtime
-foreach ($Package in $RequiredPackages) {
-    if (-not (Test-Path -LiteralPath (Join-Path $Runtime $Package))) {
-        $RuntimeComplete = $false
-    }
-}
-if (-not $RuntimeComplete) {
-    New-Item -ItemType Directory -Force -Path $Runtime | Out-Null
-    & $Python -m pip install `
-        --requirement $LockFile `
-        --target $Runtime `
-        --extra-index-url "https://download.pytorch.org/whl/cu128"
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to prepare portable Python dependencies."
-    }
-} else {
-    Write-Host "Portable Python dependencies already exist; skipping."
+& $Python -c "import bitsandbytes, numpy, PySide6, qwen_asr, sounddevice, soundfile, torch, transformers"
+if ($LASTEXITCODE -ne 0) {
+    throw "Required global Python packages are missing. See requirements.lock."
 }
 
 function Test-ModelComplete {
@@ -108,10 +85,12 @@ $FilesToHash = Get-ChildItem -LiteralPath (Join-Path $Root ".models") `
     -File -Recurse
 $Hashes = [ordered]@{}
 foreach ($File in $FilesToHash) {
-    $Relative = [IO.Path]::GetRelativePath($Root, $File.FullName)
+    $Relative = $File.FullName.Substring($Root.Length).TrimStart("\")
     $Hashes[$Relative] = (Get-FileHash -LiteralPath $File.FullName `
         -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 $HashPath = Join-Path $Root "release-files.sha256.json"
-$Hashes | ConvertTo-Json | Set-Content -LiteralPath $HashPath -Encoding utf8
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$HashJson = ($Hashes | ConvertTo-Json) + [Environment]::NewLine
+[IO.File]::WriteAllText($HashPath, $HashJson, $Utf8NoBom)
 Write-Host "Release preparation completed."

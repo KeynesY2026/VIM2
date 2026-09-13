@@ -4,5 +4,4 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 temp/
-runtime/site-packages/
-runtime/huggingface/
+*benchmark-smoke*.json

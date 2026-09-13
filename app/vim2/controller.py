@@ -107,6 +107,9 @@ class AppController:
     def toggle_recording(self) -> None:
         if self._operation_busy:
             return
+        if self._preview_busy:
+            self._stop_requested = True
+            return
         if self.state is AppState.READY:
             self._start_recording()
         elif self.state is AppState.RECORDING:
@@ -188,6 +191,10 @@ class AppController:
             self._view.show_error(str(error))
 
     def cancel(self) -> None:
+        if self._preview_busy:
+            self._cancel_requested = True
+            self._stop_requested = False
+            return
         if self.state is AppState.LIVE_TRANSCRIBING:
             self._cancel_requested = True
             return
