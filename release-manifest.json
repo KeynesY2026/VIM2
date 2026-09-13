@@ -1,0 +1,25 @@
+{
+  "application": {
+    "name": "VIM2",
+    "version": "0.1.0"
+  },
+  "models": {
+    "qwen3-asr-0.6b-fp16": {
+      "directory": ".models/Qwen3-ASR-0.6B",
+      "model_id": "Qwen/Qwen3-ASR-0.6B",
+      "precision": "FP16",
+      "revision": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0"
+    },
+    "qwen3-asr-1.7b-int8": {
+      "directory": ".models/Qwen3-ASR-1.7B-INT8",
+      "model_id": "Qwen/Qwen3-ASR-1.7B",
+      "precision": "BitsAndBytesConfig(load_in_8bit=True)",
+      "revision": "7278e1e70fe206f11671096ffdd38061171dd6e5"
+    }
+  },
+  "platform": {
+    "minimum_nvidia_driver": "570.00",
+    "python": ">=3.10,<3.14",
+    "verified_windows": []
+  }
+}

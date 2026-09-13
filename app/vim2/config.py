@@ -1,0 +1,76 @@
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+from vim2.models import ModelId
+
+DEFAULT_HOTKEY = "RightAlt"
+
+
+@dataclass(frozen=True, slots=True)
+class Settings:
+    selected_model: ModelId = ModelId.FAST
+    hotkey: str = DEFAULT_HOTKEY
+    max_recording_seconds: int = 90
+
+
+class SettingsRepository:
+    def __init__(self, config_dir: Path) -> None:
+        self._config_dir = config_dir
+        self._settings_path = config_dir / "settings.json"
+        self._hotkey_path = config_dir / "hotkey.conf"
+
+    def load(self) -> Settings:
+        values: dict[str, object] = {}
+        if self._settings_path.is_file():
+            values = json.loads(self._settings_path.read_text(encoding="utf-8"))
+
+        try:
+            model = ModelId(values.get("selected_model", ModelId.FAST))
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid selected_model: {values.get('selected_model')!r}"
+            ) from exc
+
+        max_seconds = values.get("max_recording_seconds", 90)
+        if not isinstance(max_seconds, int) or not 1 <= max_seconds <= 90:
+            raise ValueError(
+                "max_recording_seconds must be an integer from 1 through 90"
+            )
+
+        hotkey = DEFAULT_HOTKEY
+        if self._hotkey_path.is_file():
+            hotkey = self._hotkey_path.read_text(encoding="utf-8").strip()
+            if not hotkey:
+                raise ValueError("hotkey.conf must not be empty")
+
+        return Settings(
+            selected_model=model,
+            hotkey=hotkey,
+            max_recording_seconds=max_seconds,
+        )
+
+    def save(self, settings: Settings) -> None:
+        self._config_dir.mkdir(parents=True, exist_ok=True)
+        settings_values = asdict(settings)
+        settings_values.pop("hotkey")
+        settings_values["selected_model"] = settings.selected_model.value
+        self._write_atomic(
+            self._settings_path,
+            json.dumps(
+                settings_values,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+        )
+        self._write_atomic(self._hotkey_path, f"{settings.hotkey}\n")
+
+    @staticmethod
+    def _write_atomic(path: Path, content: str) -> None:
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(content, encoding="utf-8")
+        temporary.replace(path)
