@@ -71,7 +71,7 @@ def test_overlay_is_non_activating_click_through_compact_capsule() -> None:
 def test_overlay_paints_v1_translucent_background() -> None:
     app = _app()
     overlay = VoiceOverlay()
-    overlay.set_recording(elapsed_seconds=1, preview="")
+    overlay.set_recording(preview="")
     overlay.show_for_window()
     QTest.qWait(220)
 
@@ -88,7 +88,7 @@ def test_overlay_paints_v1_translucent_background() -> None:
 def test_recording_overlay_stays_compact_and_draws_red_dot() -> None:
     app = _app()
     overlay = VoiceOverlay()
-    overlay.set_recording(elapsed_seconds=1, preview="")
+    overlay.set_recording(preview="")
     overlay.show_for_window()
     QTest.qWait(220)
 
@@ -105,11 +105,25 @@ def test_overlay_retains_full_preview_while_showing_tail() -> None:
     overlay = VoiceOverlay()
     full_text = "前缀" + ("very long mixed text " * 30) + "结尾"
 
-    overlay.set_recording(elapsed_seconds=7, preview=full_text)
+    overlay.set_recording(preview=full_text)
 
     assert overlay.current_preview == full_text
     assert overlay.displayed_text.endswith("结尾")
-    assert "00:07" in overlay.status_text
+    assert overlay.status_text == "正在录音"
+    assert overlay._preview.alignment() & Qt.AlignmentFlag.AlignRight
+
+
+def test_finalizing_keeps_latest_recognition_visible() -> None:
+    _app()
+    view = DesktopView()
+    view.start_recording_timers(max_seconds=90, target_window=123)
+    view.show_preview("这是最新识别出来的文字")
+
+    view.render_state(AppState.FINALIZING, model_id=ModelId.FAST)
+
+    assert view.overlay.current_preview == "这是最新识别出来的文字"
+    assert view.overlay.displayed_text == "这是最新识别出来的文字"
+    assert view.overlay.status_text == "正在录音"
 
 
 def test_tray_menu_reflects_state_and_selected_model() -> None:

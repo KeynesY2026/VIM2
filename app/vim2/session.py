@@ -47,7 +47,6 @@ class VoiceSession:
         self._target_window: int | None = None
         self._model_id: ModelId | None = None
         self._pending_audio: AudioArtifact | None = None
-        self._last_preview: str | None = None
         self._warnings: tuple[str, ...] = ()
         self._shutting_down = False
 
@@ -65,7 +64,6 @@ class VoiceSession:
         self._recorder.start()
         self._target_window = target_window
         self._model_id = model_id
-        self._last_preview = None
         self._warnings = ()
         self._machine.transition_to(AppState.RECORDING)
 
@@ -80,8 +78,6 @@ class VoiceSession:
         self._pending_audio = artifact
         self._warnings = artifact.warnings
         self._machine.transition_to(AppState.FINALIZING)
-        if self._last_preview is not None:
-            return self._complete(self._last_preview)
         return self._recognize_pending()
 
     def retry(self) -> str:
@@ -99,8 +95,6 @@ class VoiceSession:
             text = self._recognizer.transcribe(
                 artifact.path, self._model_id
             ).strip()
-            if text:
-                self._last_preview = text
             return text
         finally:
             self._recorder.discard(artifact)
@@ -135,7 +129,6 @@ class VoiceSession:
         finally:
             self._recorder.discard(artifact)
             self._pending_audio = None
-            self._last_preview = None
             self._machine.transition_to(AppState.READY)
 
     def cancel(self) -> None:

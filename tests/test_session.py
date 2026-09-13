@@ -170,23 +170,24 @@ def test_live_preview_uses_selected_model_and_keeps_recording(
     assert session.state is AppState.RECORDING
 
 
-def test_stop_reuses_latest_live_result_without_retranscribing(
+def test_stop_after_live_preview_transcribes_complete_recording(
     tmp_path: Path,
 ) -> None:
     artifact = _artifact(tmp_path)
-    recognizer = FakeRecognizer(["已经计算的结果", "不应调用"])
+    recognizer = FakeRecognizer(["前半句", "前半句和最后一段"])
     paster = FakePaster()
     session = VoiceSession(
         _ready_machine(), FakeRecorder(artifact), recognizer, paster
     )
     session.start(target_window=7, model_id=ModelId.FAST)
-    assert session.preview() == "已经计算的结果"
+    assert session.preview() == "前半句"
 
     result = session.stop()
 
-    assert result == "已经计算的结果"
-    assert len(recognizer.calls) == 1
-    assert paster.calls == [("已经计算的结果", 7)]
+    assert result == "前半句和最后一段"
+    assert recognizer.calls[-1] == (artifact.path, ModelId.FAST)
+    assert len(recognizer.calls) == 2
+    assert paster.calls == [("前半句和最后一段", 7)]
 
 
 def test_stop_falls_back_to_full_audio_when_live_result_is_empty(

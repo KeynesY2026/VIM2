@@ -182,7 +182,7 @@ def test_record_preview_and_final_result_flow(tmp_path: Path) -> None:
 
     assert view.timers_started == [90]
     assert view.previews == ["临时文本"]
-    assert paster.calls == [("临时文本", 321)]
+    assert paster.calls == [("最终文本", 321)]
     assert not recorder.path.exists()
     assert controller.state is AppState.READY
 
@@ -250,7 +250,7 @@ def test_stop_requested_before_preview_worker_starts_is_serialized(
     runner.complete_next()
     assert len(runner.tasks) == 1
     runner.complete_next()
-    assert paster.calls == [("preview", 321)]
+    assert paster.calls == [("final", 321)]
     assert controller.state is AppState.READY
 
 

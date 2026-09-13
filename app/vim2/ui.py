@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QMessageBox,
+    QSizePolicy,
     QSystemTrayIcon,
     QWidget,
 )
@@ -155,6 +156,12 @@ class VoiceOverlay(QWidget):
         self._preview.setTextInteractionFlags(
             Qt.TextInteractionFlag.NoTextInteraction
         )
+        self._preview.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._preview.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
         layout.addWidget(self._dot)
         layout.addWidget(self._status)
         layout.addWidget(self._preview, 1)
@@ -184,10 +191,9 @@ class VoiceOverlay(QWidget):
     def status_text(self) -> str:
         return self._status.text()
 
-    def set_recording(self, *, elapsed_seconds: int, preview: str) -> None:
+    def set_recording(self, *, preview: str) -> None:
         self.current_preview = preview
-        minutes, seconds = divmod(elapsed_seconds, 60)
-        self._status.setText(f"正在录音  {minutes:02d}:{seconds:02d}")
+        self._status.setText("正在录音")
         self._preview.setText(self._tail(preview))
         self._dot.set_color(QColor(230, 60, 60))
         self._resize_to_content()
@@ -369,11 +375,8 @@ class DesktopView:
         self.tray.setToolTip(STATUS_TOOLTIPS[AppState.STARTING])
 
         self._controller = None
-        self._elapsed_seconds = 0
         self._target_window: int | None = None
-        self._elapsed_timer = QTimer()
-        self._elapsed_timer.setInterval(1000)
-        self._elapsed_timer.timeout.connect(self._on_elapsed)
+        self._latest_preview = ""
         self._preview_timer = QTimer()
         self._preview_timer.setInterval(250)
         self._preview_timer.timeout.connect(self._on_preview_tick)
@@ -429,9 +432,7 @@ class DesktopView:
             )
             self.overlay.show_for_window()
         elif state is AppState.FINALIZING:
-            self.overlay.set_message(
-                "正在生成最终结果", MODEL_SPECS[model_id].display_name
-            )
+            self.overlay.set_recording(preview=self._latest_preview)
             self.overlay.show_for_window(self._target_window)
         elif state is AppState.READY:
             self.overlay.fade_out()
@@ -439,25 +440,21 @@ class DesktopView:
     def start_recording_timers(
         self, max_seconds: int, target_window: int
     ) -> None:
-        self._elapsed_seconds = 0
         self._target_window = target_window
+        self._latest_preview = ""
         self._error_hide_timer.stop()
-        self.overlay.set_recording(elapsed_seconds=0, preview="")
+        self.overlay.set_recording(preview="")
         self.overlay.show_for_window(target_window)
-        self._elapsed_timer.start()
         self._preview_timer.start()
         self._max_timer.start(max_seconds * 1000)
 
     def stop_recording_timers(self) -> None:
-        self._elapsed_timer.stop()
         self._preview_timer.stop()
         self._max_timer.stop()
 
     def show_preview(self, text: str) -> None:
-        self.overlay.set_recording(
-            elapsed_seconds=self._elapsed_seconds,
-            preview=text,
-        )
+        self._latest_preview = text
+        self.overlay.set_recording(preview=text)
 
     def show_error(self, message: str) -> None:
         self.tray.showMessage(
@@ -498,13 +495,6 @@ class DesktopView:
     def hide_overlay(self) -> None:
         self._error_hide_timer.stop()
         self.overlay.fade_out()
-
-    def _on_elapsed(self) -> None:
-        self._elapsed_seconds += 1
-        self.overlay.set_recording(
-            elapsed_seconds=self._elapsed_seconds,
-            preview=self.overlay.current_preview,
-        )
 
     def _on_preview_tick(self) -> None:
         if self._controller is not None:
