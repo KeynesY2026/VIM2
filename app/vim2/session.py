@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Protocol
 
 from vim2.audio import AudioArtifact
@@ -20,6 +19,8 @@ RECOGNITION_ERRORS = (OSError, RuntimeError, ValueError, MemoryError)
 class Recorder(Protocol):
     def start(self) -> None: ...
 
+    def seal(self) -> None: ...
+
     def stop(self) -> AudioArtifact: ...
 
     def snapshot(self) -> AudioArtifact: ...
@@ -34,7 +35,9 @@ class Recorder(Protocol):
 
 
 class Recognizer(Protocol):
-    def transcribe(self, path: Path, model_id: ModelId) -> str: ...
+    def transcribe(
+        self, artifact: AudioArtifact, model_id: ModelId
+    ) -> str: ...
 
 
 class Paster(Protocol):
@@ -63,6 +66,7 @@ class VoiceSession:
         self._warnings: tuple[str, ...] = ()
         self._shutting_down = False
         self._stable_prefix = StablePrefixTracker()
+        self._capture_sealed = False
 
     @property
     def state(self) -> AppState:
@@ -77,19 +81,38 @@ class VoiceSession:
             raise RuntimeError(f"Cannot start recording while {self.state.value}")
         self._recorder.start()
         self._stable_prefix.reset()
+        self._capture_sealed = False
         self._target_window = target_window
         self._model_id = model_id
         self._warnings = ()
         self._machine.transition_to(AppState.RECORDING)
 
+    def seal(self) -> None:
+        if self.state not in {
+            AppState.RECORDING,
+            AppState.LIVE_TRANSCRIBING,
+        }:
+            raise RuntimeError("No recording is in progress")
+        if self._capture_sealed:
+            return
+        try:
+            self._recorder.seal()
+        except (OSError, RuntimeError):
+            self._machine.transition_to(AppState.READY)
+            raise
+        self._capture_sealed = True
+
     def stop(self) -> str:
         if self.state is not AppState.RECORDING:
             raise RuntimeError("No recording is in progress")
+        if not self._capture_sealed:
+            self.seal()
         try:
             artifact = self._recorder.stop()
         except (OSError, RuntimeError):
             self._machine.transition_to(AppState.READY)
             raise
+        self._capture_sealed = False
         self._pending_audio = artifact
         self._warnings = artifact.warnings
         self._machine.transition_to(AppState.FINALIZING)
@@ -108,13 +131,16 @@ class VoiceSession:
         self._machine.transition_to(AppState.LIVE_TRANSCRIBING)
         try:
             text = self._recognizer.transcribe(
-                artifact.path, self._model_id
+                artifact, self._model_id
             ).strip()
             self._stable_prefix.observe(text, artifact.frame_count)
             return text
         finally:
             self._recorder.discard(artifact)
-            if not self._shutting_down:
+            if (
+                not self._shutting_down
+                and self.state is AppState.LIVE_TRANSCRIBING
+            ):
                 self._machine.transition_to(AppState.RECORDING)
 
     def _recognize_pending(self, *, allow_tail: bool) -> str:
@@ -154,7 +180,7 @@ class VoiceSession:
                 )
                 if merged is not None:
                     return merged
-        return self._recognizer.transcribe(artifact.path, model_id).strip()
+        return self._recognizer.transcribe(artifact, model_id).strip()
 
     def _recognize_tail(
         self,
@@ -166,7 +192,7 @@ class VoiceSession:
         tail: AudioArtifact | None = None
         try:
             tail = self._recorder.slice_from(artifact, start_frame)
-            text = self._recognizer.transcribe(tail.path, model_id).strip()
+            text = self._recognizer.transcribe(tail, model_id).strip()
             return merge_stable_tail(checkpoint, text)
         except RECOGNITION_ERRORS:
             return None
@@ -185,11 +211,13 @@ class VoiceSession:
         finally:
             self._recorder.discard(artifact)
             self._pending_audio = None
+            self._capture_sealed = False
             self._machine.transition_to(AppState.READY)
 
     def cancel(self) -> None:
         if self.state is AppState.RECORDING:
             self._recorder.cancel()
+            self._capture_sealed = False
         elif self.state is AppState.RETRY_PENDING and self._pending_audio:
             self._recorder.discard(self._pending_audio)
             self._pending_audio = None
@@ -201,6 +229,7 @@ class VoiceSession:
         self._shutting_down = True
         if self.state in {AppState.RECORDING, AppState.LIVE_TRANSCRIBING}:
             self._recorder.cancel()
+            self._capture_sealed = False
         if self._pending_audio is not None:
             self._recorder.discard(self._pending_audio)
             self._pending_audio = None

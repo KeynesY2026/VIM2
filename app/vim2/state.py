@@ -44,6 +44,7 @@ _TRANSITIONS: dict[AppState, frozenset[AppState]] = {
         {
             AppState.RECORDING,
             AppState.FINALIZING,
+            AppState.READY,
             AppState.ERROR,
             AppState.EXITING,
         }

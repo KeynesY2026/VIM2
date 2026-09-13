@@ -110,9 +110,8 @@ class AppController:
         if self._operation_busy:
             return
         if self._preview_busy:
-            if not self._stop_requested:
+            if not self._stop_requested and self._seal_recording():
                 self._stop_requested = True
-                self._view.stop_recording_timers()
                 self._view.render_state(
                     AppState.FINALIZING, self.selected_model
                 )
@@ -176,7 +175,8 @@ class AppController:
             self._render()
 
     def _finalize(self) -> None:
-        self._view.stop_recording_timers()
+        if not self._seal_recording():
+            return
         self._view.render_state(AppState.FINALIZING, self.selected_model)
         self._operation_busy = True
         self._runner.submit(
@@ -184,6 +184,17 @@ class AppController:
             self._on_finalized,
             self._on_final_error,
         )
+
+    def _seal_recording(self) -> bool:
+        self._view.stop_recording_timers()
+        try:
+            self._session.seal()
+        except (OSError, RuntimeError) as exc:
+            self._stop_requested = False
+            self._render()
+            self._view.show_error(f"无法停止录音：{exc}")
+            return False
+        return True
 
     def _on_finalized(self, result: object) -> None:
         del result

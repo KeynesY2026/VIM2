@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from vim2.audio import AudioArtifact
@@ -14,9 +15,11 @@ class FakeRecorder:
         self.started = False
         self.discarded: list[AudioArtifact] = []
         self.stop_error: Exception | None = None
+        self.seal_error: Exception | None = None
         self.slice_error: Exception | None = None
         self.snapshots: list[AudioArtifact] = []
         self.slices: list[tuple[AudioArtifact, int, AudioArtifact]] = []
+        self.seal_calls = 0
 
     def start(self) -> None:
         self.started = True
@@ -26,6 +29,12 @@ class FakeRecorder:
             raise self.stop_error
         return self.artifact
 
+    def seal(self) -> None:
+        if self.seal_error:
+            raise self.seal_error
+        self.seal_calls += 1
+        self.started = False
+
     def snapshot(self) -> AudioArtifact:
         frame_count = (
             self.snapshots[-1].frame_count + 16_000
@@ -33,13 +42,9 @@ class FakeRecorder:
             else 160_000
         )
         snapshot = AudioArtifact(
-            path=self.artifact.path.with_name(
-                f"preview-{len(self.snapshots)}.wav"
-            ),
-            frame_count=frame_count,
+            samples=np.zeros(frame_count, dtype=np.float32),
             sample_rate=self.artifact.sample_rate,
         )
-        snapshot.path.write_bytes(b"preview")
         self.snapshots.append(snapshot)
         return snapshot
 
@@ -49,12 +54,10 @@ class FakeRecorder:
         if self.slice_error:
             raise self.slice_error
         tail = AudioArtifact(
-            path=artifact.path.with_name("tail.wav"),
-            frame_count=artifact.frame_count - start_frame,
+            samples=artifact.samples[start_frame:],
             sample_rate=artifact.sample_rate,
             warnings=artifact.warnings,
         )
-        tail.path.write_bytes(b"tail")
         self.slices.append((artifact, start_frame, tail))
         return tail
 
@@ -62,17 +65,16 @@ class FakeRecorder:
         self.started = False
 
     def discard(self, artifact: AudioArtifact) -> None:
-        artifact.path.unlink(missing_ok=True)
         self.discarded.append(artifact)
 
 
 class FakeRecognizer:
     def __init__(self, responses: list[str | Exception]) -> None:
         self.responses = responses
-        self.calls: list[tuple[Path, ModelId]] = []
+        self.calls: list[tuple[AudioArtifact, ModelId]] = []
 
-    def transcribe(self, path: Path, model_id: ModelId) -> str:
-        self.calls.append((path, model_id))
+    def transcribe(self, artifact: AudioArtifact, model_id: ModelId) -> str:
+        self.calls.append((artifact, model_id))
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
@@ -94,16 +96,14 @@ def _ready_machine() -> StateMachine:
     return machine
 
 
-def _artifact(tmp_path: Path) -> AudioArtifact:
-    path = tmp_path / "recording.wav"
-    path.write_bytes(b"audio")
-    return AudioArtifact(path=path, frame_count=16_000, sample_rate=16_000)
+def _artifact(tmp_path) -> AudioArtifact:
+    del tmp_path
+    return AudioArtifact(np.zeros(16_000, dtype=np.float32), 16_000)
 
 
-def _long_artifact(tmp_path: Path) -> AudioArtifact:
-    path = tmp_path / "recording.wav"
-    path.write_bytes(b"audio")
-    return AudioArtifact(path=path, frame_count=960_000, sample_rate=16_000)
+def _long_artifact(tmp_path) -> AudioArtifact:
+    del tmp_path
+    return AudioArtifact(np.zeros(960_000, dtype=np.float32), 16_000)
 
 
 def test_final_recognition_uses_complete_recording_then_pastes_and_deletes(
@@ -119,7 +119,7 @@ def test_final_recognition_uses_complete_recording_then_pastes_and_deletes(
     result = session.stop()
 
     assert result == "最终文本"
-    assert recognizer.calls == [(artifact.path, ModelId.FAST)]
+    assert recognizer.calls == [(artifact, ModelId.FAST)]
     assert paster.calls == [("最终文本", 42)]
     assert recorder.discarded == [artifact]
     assert session.state is AppState.READY
@@ -139,7 +139,7 @@ def test_empty_result_does_not_touch_clipboard(tmp_path: Path) -> None:
 
     assert session.stop() == ""
     assert paster.calls == []
-    assert not artifact.path.exists()
+    assert session.state is AppState.READY
 
 
 def test_failed_recognition_retains_audio_and_retry_uses_original_model(
@@ -156,15 +156,15 @@ def test_failed_recognition_retains_audio_and_retry_uses_original_model(
     with pytest.raises(FinalRecognitionError, match="CUDA OOM"):
         session.stop()
 
-    assert artifact.path.exists()
+    assert artifact not in recorder.discarded
     assert session.state is AppState.RETRY_PENDING
 
     assert session.retry() == "retry result"
     assert recognizer.calls == [
-        (artifact.path, ModelId.ACCURATE),
-        (artifact.path, ModelId.ACCURATE),
+        (artifact, ModelId.ACCURATE),
+        (artifact, ModelId.ACCURATE),
     ]
-    assert not artifact.path.exists()
+    assert artifact in recorder.discarded
     assert session.state is AppState.READY
 
 
@@ -198,7 +198,7 @@ def test_live_preview_uses_selected_model_and_keeps_recording(
 
     assert preview == "临时文本"
     assert recognizer.calls[0][1] is ModelId.ACCURATE
-    assert not recognizer.calls[0][0].exists()
+    assert recognizer.calls[0][0] in recorder.discarded
     assert session.state is AppState.RECORDING
 
 
@@ -217,7 +217,7 @@ def test_stop_after_live_preview_transcribes_complete_recording(
     result = session.stop()
 
     assert result == "前半句和最后一段"
-    assert recognizer.calls[-1] == (artifact.path, ModelId.FAST)
+    assert recognizer.calls[-1] == (artifact, ModelId.FAST)
     assert len(recognizer.calls) == 2
     assert paster.calls == [("前半句和最后一段", 7)]
 
@@ -228,7 +228,7 @@ def test_stable_prefix_uses_overlapped_tail_for_final_result(
     artifact = _long_artifact(tmp_path)
     recorder = FakeRecorder(artifact)
     recorder.snapshots = [
-        AudioArtifact(tmp_path / "seed.wav", 640_000, 16_000)
+        AudioArtifact(np.zeros(640_000, dtype=np.float32), 16_000)
     ]
     recognizer = FakeRecognizer(
         ["第一句。未完成", "第一句。变化", "第一句。继续", "第一句。最后一段。"]
@@ -246,10 +246,10 @@ def test_stable_prefix_uses_overlapped_tail_for_final_result(
     complete, start_frame, tail = recorder.slices[0]
     assert complete == artifact
     assert start_frame == 560_000
-    assert recognizer.calls[-1] == (tail.path, ModelId.FAST)
+    assert recognizer.calls[-1] == (tail, ModelId.FAST)
     assert paster.calls == [("第一句。最后一段。", 7)]
-    assert not tail.path.exists()
-    assert not artifact.path.exists()
+    assert tail in recorder.discarded
+    assert artifact in recorder.discarded
 
 
 @pytest.mark.parametrize(
@@ -262,7 +262,7 @@ def test_unusable_tail_falls_back_to_complete_recording(
     artifact = _long_artifact(tmp_path)
     recorder = FakeRecorder(artifact)
     recorder.snapshots = [
-        AudioArtifact(tmp_path / "seed.wav", 640_000, 16_000)
+        AudioArtifact(np.zeros(640_000, dtype=np.float32), 16_000)
     ]
     recognizer = FakeRecognizer(
         [
@@ -284,12 +284,12 @@ def test_unusable_tail_falls_back_to_complete_recording(
     tail = recorder.slices[0][2]
     assert result == "第一句。完整尾段。"
     assert recognizer.calls[-2:] == [
-        (tail.path, ModelId.FAST),
-        (artifact.path, ModelId.FAST),
+        (tail, ModelId.FAST),
+        (artifact, ModelId.FAST),
     ]
     assert paster.calls == [("第一句。完整尾段。", 7)]
-    assert not tail.path.exists()
-    assert not artifact.path.exists()
+    assert tail in recorder.discarded
+    assert artifact in recorder.discarded
 
 
 def test_tail_recognition_error_falls_back_to_complete_recording(
@@ -298,7 +298,7 @@ def test_tail_recognition_error_falls_back_to_complete_recording(
     artifact = _long_artifact(tmp_path)
     recorder = FakeRecorder(artifact)
     recorder.snapshots = [
-        AudioArtifact(tmp_path / "seed.wav", 640_000, 16_000)
+        AudioArtifact(np.zeros(640_000, dtype=np.float32), 16_000)
     ]
     recognizer = FakeRecognizer(
         [
@@ -321,12 +321,12 @@ def test_tail_recognition_error_falls_back_to_complete_recording(
     tail = recorder.slices[0][2]
     assert result == "第一句。完整尾段。"
     assert recognizer.calls[-2:] == [
-        (tail.path, ModelId.FAST),
-        (artifact.path, ModelId.FAST),
+        (tail, ModelId.FAST),
+        (artifact, ModelId.FAST),
     ]
     assert paster.calls == [("第一句。完整尾段。", 7)]
-    assert not tail.path.exists()
-    assert not artifact.path.exists()
+    assert tail in recorder.discarded
+    assert artifact in recorder.discarded
 
 
 @pytest.mark.parametrize(
@@ -345,7 +345,7 @@ def test_tail_slice_error_falls_back_to_complete_recording(
     recorder = FakeRecorder(artifact)
     recorder.slice_error = slice_error
     recorder.snapshots = [
-        AudioArtifact(tmp_path / "seed.wav", 640_000, 16_000)
+        AudioArtifact(np.zeros(640_000, dtype=np.float32), 16_000)
     ]
     recognizer = FakeRecognizer(
         [
@@ -364,10 +364,9 @@ def test_tail_slice_error_falls_back_to_complete_recording(
     result = session.stop()
 
     assert result == "第一句。完整尾段。"
-    assert recognizer.calls[-1] == (artifact.path, ModelId.FAST)
+    assert recognizer.calls[-1] == (artifact, ModelId.FAST)
     assert paster.calls == [("第一句。完整尾段。", 7)]
     assert artifact in recorder.discarded
-    assert not artifact.path.exists()
     assert session.state is AppState.READY
 
 
@@ -377,7 +376,7 @@ def test_failed_tail_and_full_recognition_retries_complete_recording(
     artifact = _long_artifact(tmp_path)
     recorder = FakeRecorder(artifact)
     recorder.snapshots = [
-        AudioArtifact(tmp_path / "seed.wav", 640_000, 16_000)
+        AudioArtifact(np.zeros(640_000, dtype=np.float32), 16_000)
     ]
     recognizer = FakeRecognizer(
         [
@@ -399,14 +398,14 @@ def test_failed_tail_and_full_recognition_retries_complete_recording(
         session.stop()
 
     tail = recorder.slices[0][2]
-    assert not tail.path.exists()
-    assert artifact.path.exists()
+    assert tail in recorder.discarded
+    assert artifact not in recorder.discarded
     assert session.state is AppState.RETRY_PENDING
 
     assert session.retry() == "第一句。重试成功。"
-    assert recognizer.calls[-1] == (artifact.path, ModelId.FAST)
+    assert recognizer.calls[-1] == (artifact, ModelId.FAST)
     assert paster.calls == [("第一句。重试成功。", 7)]
-    assert not artifact.path.exists()
+    assert artifact in recorder.discarded
     assert session.state is AppState.READY
 
 
@@ -416,7 +415,7 @@ def test_cancel_after_optimized_finalization_failure_cleans_audio(
     artifact = _long_artifact(tmp_path)
     recorder = FakeRecorder(artifact)
     recorder.snapshots = [
-        AudioArtifact(tmp_path / "seed.wav", 640_000, 16_000)
+        AudioArtifact(np.zeros(640_000, dtype=np.float32), 16_000)
     ]
     recognizer = FakeRecognizer(
         [
@@ -439,8 +438,8 @@ def test_cancel_after_optimized_finalization_failure_cleans_audio(
     tail = recorder.slices[0][2]
     session.cancel()
 
-    assert not tail.path.exists()
-    assert not artifact.path.exists()
+    assert tail in recorder.discarded
+    assert artifact in recorder.discarded
     assert session.state is AppState.READY
 
 
@@ -450,7 +449,7 @@ def test_shutdown_after_optimized_finalization_failure_cleans_audio(
     artifact = _long_artifact(tmp_path)
     recorder = FakeRecorder(artifact)
     recorder.snapshots = [
-        AudioArtifact(tmp_path / "seed.wav", 640_000, 16_000)
+        AudioArtifact(np.zeros(640_000, dtype=np.float32), 16_000)
     ]
     recognizer = FakeRecognizer(
         [
@@ -473,19 +472,17 @@ def test_shutdown_after_optimized_finalization_failure_cleans_audio(
     tail = recorder.slices[0][2]
     session.shutdown()
 
-    assert not tail.path.exists()
-    assert not artifact.path.exists()
+    assert tail in recorder.discarded
+    assert artifact in recorder.discarded
 
 
 def test_tail_over_ratio_limit_uses_complete_recording(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / "recording.wav"
-    path.write_bytes(b"audio")
-    artifact = AudioArtifact(path, 320_000, 16_000)
+    artifact = AudioArtifact(np.zeros(320_000, dtype=np.float32), 16_000)
     recorder = FakeRecorder(artifact)
     recorder.snapshots = [
-        AudioArtifact(tmp_path / "seed.wav", 160_000, 16_000)
+        AudioArtifact(np.zeros(160_000, dtype=np.float32), 16_000)
     ]
     recognizer = FakeRecognizer(
         ["第一句。未完成", "第一句。变化", "第一句。继续", "完整结果。"]
@@ -499,7 +496,7 @@ def test_tail_over_ratio_limit_uses_complete_recording(
 
     assert session.stop() == "完整结果。"
     assert recorder.slices == []
-    assert recognizer.calls[-1] == (artifact.path, ModelId.FAST)
+    assert recognizer.calls[-1] == (artifact, ModelId.FAST)
 
 
 def test_stop_falls_back_to_full_audio_when_live_result_is_empty(
@@ -549,6 +546,23 @@ def test_microphone_stop_failure_returns_session_to_ready(
 
     with pytest.raises(RuntimeError, match="input overflow"):
         session.stop()
+
+    assert session.state is AppState.READY
+
+
+def test_microphone_seal_failure_during_preview_returns_session_to_ready(
+    tmp_path: Path,
+) -> None:
+    recorder = FakeRecorder(_artifact(tmp_path))
+    recorder.seal_error = RuntimeError("cannot stop input")
+    session = VoiceSession(
+        _ready_machine(), recorder, FakeRecognizer([]), FakePaster()
+    )
+    session.start(target_window=7, model_id=ModelId.FAST)
+    session._machine.transition_to(AppState.LIVE_TRANSCRIBING)
+
+    with pytest.raises(RuntimeError, match="cannot stop input"):
+        session.seal()
 
     assert session.state is AppState.READY
 

@@ -3,8 +3,10 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
+from vim2.audio import AudioArtifact
 from vim2.models import MODEL_SPECS, ModelId
 from vim2.paths import AppPaths
 from vim2.recognizer import (
@@ -118,6 +120,23 @@ def test_accurate_model_uses_int8_quantization(tmp_path: Path) -> None:
 def test_transcribe_uses_loaded_model_and_auto_language(tmp_path: Path) -> None:
     recognizer, loader, _ = _recognizer(tmp_path)
     recognizer.load(ModelId.FAST)
+    samples = np.array([0.1, -0.2], dtype=np.float32)
+    artifact = AudioArtifact(samples=samples, sample_rate=16_000)
+
+    result = recognizer.transcribe(artifact, ModelId.FAST)
+
+    assert result == "recognized"
+    audio, sample_rate = loader.models[0].calls[0]["audio"]
+    assert audio is samples
+    assert sample_rate == 16_000
+    assert loader.models[0].calls[0]["language"] is None
+
+
+def test_transcribe_accepts_existing_audio_path_for_benchmarks(
+    tmp_path: Path,
+) -> None:
+    recognizer, loader, _ = _recognizer(tmp_path)
+    recognizer.load(ModelId.FAST)
     audio_path = tmp_path / "sample.wav"
 
     result = recognizer.transcribe(audio_path, ModelId.FAST)
@@ -162,7 +181,10 @@ def test_transcribe_rejects_model_other_than_resident_model(
     recognizer.load(ModelId.FAST)
 
     with pytest.raises(RuntimeError, match="not loaded"):
-        recognizer.transcribe(tmp_path / "sample.wav", ModelId.ACCURATE)
+        recognizer.transcribe(
+            AudioArtifact(np.zeros(1, dtype=np.float32), 16_000),
+            ModelId.ACCURATE,
+        )
 
 
 def test_offline_environment_disables_implicit_model_downloads(

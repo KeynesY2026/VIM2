@@ -1,21 +1,21 @@
 from __future__ import annotations
 
 import threading
-import uuid
-import wave
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class AudioArtifact:
-    path: Path
-    frame_count: int
+    samples: np.ndarray
     sample_rate: int
     warnings: tuple[str, ...] = ()
+
+    @property
+    def frame_count(self) -> int:
+        return len(self.samples)
 
     @property
     def duration_seconds(self) -> float:
@@ -25,7 +25,6 @@ class AudioArtifact:
 class AudioRecorder:
     def __init__(
         self,
-        temp_dir: Path,
         *,
         sounddevice: Any | None = None,
         sample_rate: int = 16_000,
@@ -35,18 +34,20 @@ class AudioRecorder:
 
             sounddevice = sounddevice
         self._sounddevice = sounddevice
-        self._temp_dir = temp_dir
         self._sample_rate = sample_rate
         self._stream: Any | None = None
         self._chunks: list[np.ndarray] = []
         self._status_errors: list[str] = []
         self._lock = threading.Lock()
+        self._accepting_audio = False
+        self._sealed = False
 
     def start(self) -> None:
-        if self._stream is not None:
+        if self._stream is not None or self._sealed:
             raise RuntimeError("A recording is already in progress")
         self._chunks = []
         self._status_errors = []
+        self._accepting_audio = True
         portaudio_error = getattr(
             self._sounddevice, "PortAudioError", RuntimeError
         )
@@ -62,6 +63,7 @@ class AudioRecorder:
             )
             stream.start()
         except (OSError, RuntimeError, portaudio_error) as exc:
+            self._accepting_audio = False
             raise RuntimeError(
                 f"Cannot open the current Windows default microphone: {exc}"
             ) from exc
@@ -77,26 +79,42 @@ class AudioRecorder:
         del frames, time_info
         chunk = indata.copy()
         with self._lock:
+            if not self._accepting_audio:
+                return
             if status:
                 self._status_errors.append(str(status))
             self._chunks.append(chunk)
 
-    def stop(self) -> AudioArtifact:
+    def seal(self) -> None:
         if self._stream is None:
+            if self._sealed:
+                return
             raise RuntimeError("No recording is in progress")
         stream = self._stream
         self._stream = None
-        stream.stop()
-        stream.close()
+        with self._lock:
+            self._accepting_audio = False
+        try:
+            stream.stop()
+        finally:
+            stream.close()
+        self._sealed = True
+
+    def stop(self) -> AudioArtifact:
+        if self._stream is not None:
+            self.seal()
+        elif not self._sealed:
+            raise RuntimeError("No recording is in progress")
 
         with self._lock:
             chunks = list(self._chunks)
             warnings = tuple(self._status_errors)
             self._chunks = []
             self._status_errors = []
+            self._sealed = False
 
         samples = self._join_chunks(chunks)
-        return self._write_wav(samples, "recording", warnings=warnings)
+        return AudioArtifact(samples, self._sample_rate, warnings)
 
     def snapshot(self) -> AudioArtifact:
         if self._stream is None:
@@ -104,7 +122,7 @@ class AudioRecorder:
         with self._lock:
             chunks = list(self._chunks)
         samples = self._join_chunks(chunks)
-        return self._write_wav(samples, "preview")
+        return AudioArtifact(samples, self._sample_rate)
 
     @staticmethod
     def _join_chunks(chunks: list[np.ndarray]) -> np.ndarray:
@@ -112,29 +130,6 @@ class AudioRecorder:
             np.concatenate(chunks, axis=0).reshape(-1)
             if chunks
             else np.empty(0, dtype=np.float32)
-        )
-
-    def _write_wav(
-        self,
-        samples: np.ndarray,
-        prefix: str,
-        *,
-        warnings: tuple[str, ...] = (),
-    ) -> AudioArtifact:
-        pcm = np.clip(samples, -1.0, 1.0)
-        pcm = (pcm * 32767.0).astype("<i2")
-        self._temp_dir.mkdir(parents=True, exist_ok=True)
-        path = self._temp_dir / f"{prefix}-{uuid.uuid4().hex}.wav"
-        with wave.open(str(path), "wb") as wav:
-            wav.setnchannels(1)
-            wav.setsampwidth(2)
-            wav.setframerate(self._sample_rate)
-            wav.writeframes(pcm.tobytes())
-        return AudioArtifact(
-            path=path,
-            frame_count=len(samples),
-            sample_rate=self._sample_rate,
-            warnings=warnings,
         )
 
     def slice_from(
@@ -145,41 +140,25 @@ class AudioRecorder:
                 "start_frame must reference an existing audio frame"
             )
 
-        with wave.open(str(artifact.path), "rb") as source:
-            params = source.getparams()
-            source.setpos(start_frame)
-            frames = source.readframes(params.nframes - start_frame)
-
-        self._temp_dir.mkdir(parents=True, exist_ok=True)
-        path = self._temp_dir / f"tail-{uuid.uuid4().hex}.wav"
-        completed = False
-        try:
-            with wave.open(str(path), "wb") as tail:
-                tail.setparams(params)
-                tail.writeframes(frames)
-            completed = True
-        finally:
-            if not completed:
-                path.unlink(missing_ok=True)
-
         return AudioArtifact(
-            path=path,
-            frame_count=params.nframes - start_frame,
-            sample_rate=params.framerate,
+            samples=artifact.samples[start_frame:],
+            sample_rate=artifact.sample_rate,
             warnings=artifact.warnings,
         )
 
     def cancel(self) -> None:
-        if self._stream is None:
-            return
-        stream = self._stream
-        self._stream = None
-        stream.stop()
-        stream.close()
+        with self._lock:
+            self._accepting_audio = False
+        if self._stream is not None:
+            stream = self._stream
+            self._stream = None
+            stream.stop()
+            stream.close()
         with self._lock:
             self._chunks = []
             self._status_errors = []
+            self._sealed = False
 
     @staticmethod
     def discard(artifact: AudioArtifact) -> None:
-        artifact.path.unlink(missing_ok=True)
+        del artifact

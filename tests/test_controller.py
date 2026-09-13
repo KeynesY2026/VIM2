@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import numpy as np
+
 from vim2.audio import AudioArtifact
 from vim2.config import Settings
 from vim2.controller import AppController
@@ -51,7 +53,10 @@ class FakeLifecycleRecognizer:
     def unload(self) -> None:
         self.unloaded = True
 
-    def transcribe(self, path: Path, model_id: ModelId) -> str:
+    def transcribe(
+        self, artifact: AudioArtifact, model_id: ModelId
+    ) -> str:
+        del artifact, model_id
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
@@ -60,26 +65,30 @@ class FakeLifecycleRecognizer:
 
 class FakeRecorder:
     def __init__(self, tmp_path: Path) -> None:
-        self.path = tmp_path / "recording.wav"
+        del tmp_path
         self.started = False
+        self.discarded: list[AudioArtifact] = []
+        self.seal_calls = 0
 
     def start(self) -> None:
         self.started = True
 
     def stop(self) -> AudioArtifact:
-        self.path.write_bytes(b"audio")
         self.started = False
-        return AudioArtifact(self.path, 16_000, 16_000)
+        return AudioArtifact(np.zeros(16_000, dtype=np.float32), 16_000)
+
+    def seal(self) -> None:
+        self.seal_calls += 1
+        self.started = False
 
     def snapshot(self) -> AudioArtifact:
-        self.path.write_bytes(b"preview")
-        return AudioArtifact(self.path, 8_000, 16_000)
+        return AudioArtifact(np.zeros(8_000, dtype=np.float32), 16_000)
 
     def cancel(self) -> None:
         self.started = False
 
     def discard(self, artifact: AudioArtifact) -> None:
-        artifact.path.unlink(missing_ok=True)
+        self.discarded.append(artifact)
 
 
 class FakePaster:
@@ -183,7 +192,7 @@ def test_record_preview_and_final_result_flow(tmp_path: Path) -> None:
     assert view.timers_started == [90]
     assert view.previews == ["临时文本"]
     assert paster.calls == [("最终文本", 321)]
-    assert not recorder.path.exists()
+    assert len(recorder.discarded) == 2
     assert controller.state is AppState.READY
 
 
@@ -249,6 +258,9 @@ def test_stop_requested_before_preview_worker_starts_is_serialized(
     assert view.states[-1] is AppState.FINALIZING
     assert view.timers_stopped == 1
     assert len(runner.tasks) == 1
+    assert recorder.seal_calls == 1
+    assert not recorder.started
+    assert view.timers_stopped == 1
     runner.complete_next()
     assert len(runner.tasks) == 1
     runner.complete_next()
@@ -262,14 +274,11 @@ def test_nonfatal_capture_warning_is_reported_after_result(
     controller, _, recorder, _, view, _ = _controller(
         tmp_path, ["recognized"]
     )
-    recorder.path.write_bytes(b"audio")
-
     def stop_with_warning() -> AudioArtifact:
         recorder.started = False
         return AudioArtifact(
-            recorder.path,
-            16_000,
-            16_000,
+            np.zeros(16_000, dtype=np.float32),
+            sample_rate=16_000,
             warnings=("input overflow",),
         )
 

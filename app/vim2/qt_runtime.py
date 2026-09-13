@@ -117,7 +117,7 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
 
     machine = StateMachine()
     recognizer = QwenRecognizer(paths)
-    recorder = AudioRecorder(paths.temp_dir)
+    recorder = AudioRecorder()
     bridge = _HotkeyBridge()
     dispatcher = HotkeyDispatcher(
         parse_hotkey(settings.hotkey),

@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from vim2.audio import AudioArtifact
 from vim2.models import MODEL_SPECS, ModelId
 from vim2.paths import AppPaths
 
@@ -128,16 +129,20 @@ class QwenRecognizer:
                     f"{MODEL_SPECS[previous].display_name} was restored."
                 ) from switch_error
 
-    def transcribe(self, path: Path, model_id: ModelId) -> str:
+    def transcribe(
+        self, audio: AudioArtifact | Path, model_id: ModelId
+    ) -> str:
         with self._lock:
             if self._model is None or self._loaded_model is not model_id:
                 raise RuntimeError(
                     f"{MODEL_SPECS[model_id].display_name} is not loaded"
                 )
-            results = self._model.transcribe(
-                audio=str(path),
-                language=None,
-            )
+            model_audio: tuple[Any, int] | str
+            if isinstance(audio, AudioArtifact):
+                model_audio = (audio.samples, audio.sample_rate)
+            else:
+                model_audio = str(audio)
+            results = self._model.transcribe(audio=model_audio, language=None)
             if not results:
                 raise RuntimeError("Qwen3-ASR returned no recognition result")
             text = results[0].text
