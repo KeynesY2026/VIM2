@@ -47,6 +47,7 @@ class VoiceSession:
         self._target_window: int | None = None
         self._model_id: ModelId | None = None
         self._pending_audio: AudioArtifact | None = None
+        self._shutting_down = False
 
     @property
     def state(self) -> AppState:
@@ -89,7 +90,8 @@ class VoiceSession:
             ).strip()
         finally:
             self._recorder.discard(artifact)
-            self._machine.transition_to(AppState.RECORDING)
+            if not self._shutting_down:
+                self._machine.transition_to(AppState.RECORDING)
 
     def _recognize_pending(self) -> str:
         if (
@@ -125,3 +127,11 @@ class VoiceSession:
         else:
             raise RuntimeError("There is no recording or failed audio to cancel")
         self._machine.transition_to(AppState.READY)
+
+    def shutdown(self) -> None:
+        self._shutting_down = True
+        if self.state in {AppState.RECORDING, AppState.LIVE_TRANSCRIBING}:
+            self._recorder.cancel()
+        if self._pending_audio is not None:
+            self._recorder.discard(self._pending_audio)
+            self._pending_audio = None

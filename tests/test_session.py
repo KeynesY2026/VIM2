@@ -200,3 +200,19 @@ def test_microphone_stop_failure_returns_session_to_ready(
         session.stop()
 
     assert session.state is AppState.READY
+
+
+def test_shutdown_during_live_preview_stops_capture_without_state_race(
+    tmp_path: Path,
+) -> None:
+    recorder = FakeRecorder(_artifact(tmp_path))
+    session = VoiceSession(
+        _ready_machine(), recorder, FakeRecognizer([]), FakePaster()
+    )
+    session.start(target_window=7, model_id=ModelId.FAST)
+    session._machine.transition_to(AppState.LIVE_TRANSCRIBING)
+
+    session.shutdown()
+
+    assert not recorder.started
+    assert session.state is AppState.LIVE_TRANSCRIBING

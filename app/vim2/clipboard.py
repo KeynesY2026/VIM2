@@ -61,6 +61,20 @@ class NativeWindowsApi:
             wintypes.HANDLE,
         )
         self._user32.SetClipboardData.restype = wintypes.HANDLE
+        self._user32.GetForegroundWindow.restype = wintypes.HWND
+        self._user32.SetForegroundWindow.argtypes = (wintypes.HWND,)
+        self._user32.SetForegroundWindow.restype = wintypes.BOOL
+        self._user32.GetWindowThreadProcessId.argtypes = (
+            wintypes.HWND,
+            ctypes.POINTER(wintypes.DWORD),
+        )
+        self._user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        self._user32.AttachThreadInput.argtypes = (
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.BOOL,
+        )
+        self._user32.AttachThreadInput.restype = wintypes.BOOL
         self._user32.SendInput.argtypes = (
             wintypes.UINT,
             ctypes.POINTER(_Input),

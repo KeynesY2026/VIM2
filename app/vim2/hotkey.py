@@ -268,10 +268,26 @@ class WindowsHotkeyListener:
     def _message_loop(self) -> None:
         user32 = ctypes.WinDLL("user32", use_last_error=True)
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetModuleHandleW.argtypes = (wintypes.LPCWSTR,)
+        kernel32.GetModuleHandleW.restype = wintypes.HMODULE
         self._thread_id = kernel32.GetCurrentThreadId()
         hook_type = ctypes.WINFUNCTYPE(
             wintypes.LPARAM, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
         )
+        user32.SetWindowsHookExW.argtypes = (
+            ctypes.c_int,
+            hook_type,
+            wintypes.HINSTANCE,
+            wintypes.DWORD,
+        )
+        user32.SetWindowsHookExW.restype = wintypes.HHOOK
+        user32.CallNextHookEx.argtypes = (
+            wintypes.HHOOK,
+            ctypes.c_int,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        )
+        user32.CallNextHookEx.restype = wintypes.LPARAM
 
         def hook_callback(
             code: int, message: int, data_address: int
@@ -295,7 +311,10 @@ class WindowsHotkeyListener:
 
         self._callback = hook_type(hook_callback)
         self._hook = user32.SetWindowsHookExW(
-            self._WH_KEYBOARD_LL, self._callback, None, 0
+            self._WH_KEYBOARD_LL,
+            self._callback,
+            kernel32.GetModuleHandleW(None),
+            0,
         )
         if not self._hook:
             self._startup_error = OSError(
