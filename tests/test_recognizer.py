@@ -1,6 +1,7 @@
 import builtins
 import os
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import numpy as np
@@ -12,6 +13,7 @@ from vim2.paths import AppPaths
 from vim2.recognizer import (
     ModelSwitchError,
     QwenRecognizer,
+    TranscriptionCancelled,
     enforce_offline_environment,
 )
 
@@ -43,10 +45,28 @@ class FakeModel:
     def __init__(self, text: str = "recognized") -> None:
         self.text = text
         self.calls: list[dict[str, object]] = []
+        self.model = FakeGenerationModel()
 
     def transcribe(self, **kwargs):
         self.calls.append(kwargs)
+        self.model.generate()
         return [SimpleNamespace(text=self.text)]
+
+
+class FakeGenerationModel:
+    def __init__(self) -> None:
+        self.cancel_on_generate: threading.Event | None = None
+        self.cancel_observed = False
+
+    def generate(self, **kwargs) -> None:
+        if self.cancel_on_generate is not None:
+            self.cancel_on_generate.set()
+        stopping_criteria = kwargs.get("stopping_criteria")
+        if stopping_criteria is not None:
+            self.cancel_observed = any(
+                bool(criterion(None, None))
+                for criterion in stopping_criteria
+            )
 
 
 class FakeLoader:
@@ -131,6 +151,39 @@ def test_transcribe_uses_loaded_model_and_auto_language(tmp_path: Path) -> None:
     assert audio is samples
     assert sample_rate == 16_000
     assert loader.models[0].calls[0]["language"] is None
+
+
+def test_transcribe_skips_model_when_already_cancelled(tmp_path: Path) -> None:
+    recognizer, loader, _ = _recognizer(tmp_path)
+    recognizer.load(ModelId.FAST)
+    cancel_event = threading.Event()
+    cancel_event.set()
+
+    with pytest.raises(TranscriptionCancelled):
+        recognizer.transcribe(
+            AudioArtifact(np.zeros(1, dtype=np.float32), 16_000),
+            ModelId.FAST,
+            cancel_event=cancel_event,
+        )
+
+    assert loader.models[0].calls == []
+
+
+def test_transcribe_cancels_during_model_generation(tmp_path: Path) -> None:
+    recognizer, loader, _ = _recognizer(tmp_path)
+    recognizer.load(ModelId.FAST)
+    cancel_event = threading.Event()
+    generation_model = loader.models[0].model
+    generation_model.cancel_on_generate = cancel_event
+
+    with pytest.raises(TranscriptionCancelled):
+        recognizer.transcribe(
+            AudioArtifact(np.zeros(1, dtype=np.float32), 16_000),
+            ModelId.FAST,
+            cancel_event=cancel_event,
+        )
+
+    assert generation_model.cancel_observed
 
 
 def test_transcribe_accepts_existing_audio_path_for_benchmarks(

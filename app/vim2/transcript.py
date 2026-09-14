@@ -36,6 +36,16 @@ class StablePrefixTracker:
             self._candidate = ""
             self._matches = 0
             return
+        confirmed = _prefix_before_last_sentence(prefix)
+        if confirmed and (
+            self._checkpoint is None
+            or len(confirmed) > len(self._checkpoint.prefix)
+        ):
+            self._checkpoint = StableCheckpoint(
+                prefix=confirmed,
+                anchor=_last_sentence(confirmed),
+                frame_count=frame_count,
+            )
         if prefix == self._candidate:
             self._matches += 1
         else:
@@ -68,6 +78,13 @@ def _complete_prefix(text: str) -> str:
         default=-1,
     )
     return text[: final_ending + 1]
+
+
+def _prefix_before_last_sentence(prefix: str) -> str:
+    anchor = _last_sentence(prefix)
+    if not anchor:
+        return ""
+    return prefix[: prefix.rfind(anchor)].rstrip()
 
 
 def _last_sentence(prefix: str) -> str:

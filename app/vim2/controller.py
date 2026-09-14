@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import threading
 from typing import Callable, Protocol
 
 from vim2.config import Settings
 from vim2.models import ModelId
+from vim2.recognizer import TranscriptionCancelled
 from vim2.session import FinalRecognitionError, VoiceSession
 from vim2.state import AppState, StateMachine
 
@@ -75,6 +77,8 @@ class AppController:
         self._runner = task_runner
         self._foreground_window = foreground_window
         self._preview_busy = False
+        self._preview_pending = False
+        self._preview_cancel_event: threading.Event | None = None
         self._stop_requested = False
         self._cancel_requested = False
         self._operation_busy = False
@@ -113,6 +117,9 @@ class AppController:
         if self._operation_busy:
             return
         if self._preview_busy:
+            self._preview_pending = False
+            if self._preview_cancel_event is not None:
+                self._preview_cancel_event.set()
             if not self._stop_requested and self._seal_recording():
                 self._stop_requested = True
                 self._view.render_state(
@@ -127,6 +134,7 @@ class AppController:
             self._stop_requested = True
 
     def _start_recording(self) -> None:
+        self._preview_pending = False
         target_window = self._foreground_window()
         try:
             self._session.start(
@@ -144,28 +152,37 @@ class AppController:
         )
 
     def request_preview(self) -> None:
-        if self.state is not AppState.RECORDING or self._preview_busy:
+        if self._preview_busy:
+            if not self._stop_requested and not self._cancel_requested:
+                self._preview_pending = True
+            return
+        if self.state is not AppState.RECORDING:
             return
         self._preview_busy = True
+        cancel_event = threading.Event()
+        self._preview_cancel_event = cancel_event
         self._view.render_state(
             AppState.LIVE_TRANSCRIBING, self.selected_model
         )
         self._runner.submit(
-            self._session.preview,
+            lambda: self._session.preview(cancel_event=cancel_event),
             self._on_preview,
             self._on_preview_error,
         )
 
     def _on_preview(self, result: object) -> None:
         self._preview_busy = False
+        self._preview_cancel_event = None
         self._view.show_preview(str(result))
         self._after_preview()
 
     def _on_preview_error(self, error: Exception) -> None:
         self._preview_busy = False
-        self._view.show_warning(
-            f"实时转写失败，将在下一次刷新时重试：{error}"
-        )
+        self._preview_cancel_event = None
+        if not isinstance(error, TranscriptionCancelled):
+            self._view.show_warning(
+                f"实时转写失败，将在下一次刷新时重试：{error}"
+            )
         self._after_preview()
 
     def _after_preview(self) -> None:
@@ -175,10 +192,14 @@ class AppController:
         elif self._stop_requested:
             self._stop_requested = False
             self._finalize()
+        elif self._preview_pending:
+            self._preview_pending = False
+            self.request_preview()
         else:
             self._render()
 
     def _finalize(self) -> None:
+        self._preview_pending = False
         if not self._seal_recording():
             return
         self._view.render_state(AppState.FINALIZING, self.selected_model)
@@ -220,7 +241,10 @@ class AppController:
             self._view.show_error(str(error))
 
     def cancel(self) -> None:
+        self._preview_pending = False
         if self._preview_busy:
+            if self._preview_cancel_event is not None:
+                self._preview_cancel_event.set()
             self._cancel_requested = True
             self._stop_requested = False
             return
@@ -278,6 +302,9 @@ class AppController:
         self._view.show_error(f"模型切换失败：{error}")
 
     def shutdown(self) -> None:
+        self._preview_pending = False
+        if self._preview_cancel_event is not None:
+            self._preview_cancel_event.set()
         self._session.shutdown()
         if self.state is not AppState.EXITING:
             self._machine.transition_to(AppState.EXITING)

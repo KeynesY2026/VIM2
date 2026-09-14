@@ -1,4 +1,5 @@
 from pathlib import Path
+import threading
 
 import numpy as np
 
@@ -6,6 +7,7 @@ from vim2.audio import AudioArtifact
 from vim2.config import Settings
 from vim2.controller import AppController
 from vim2.models import ModelId
+from vim2.recognizer import TranscriptionCancelled
 from vim2.session import VoiceSession
 from vim2.state import AppState, StateMachine
 
@@ -43,6 +45,7 @@ class FakeLifecycleRecognizer:
         self.loaded: list[ModelId] = []
         self.switched: list[ModelId] = []
         self.unloaded = False
+        self.transcribe_calls = 0
 
     def load(self, model_id: ModelId) -> None:
         self.loaded.append(model_id)
@@ -54,9 +57,16 @@ class FakeLifecycleRecognizer:
         self.unloaded = True
 
     def transcribe(
-        self, artifact: AudioArtifact, model_id: ModelId
+        self,
+        artifact: AudioArtifact,
+        model_id: ModelId,
+        *,
+        cancel_event: threading.Event | None = None,
     ) -> str:
         del artifact, model_id
+        if cancel_event is not None and cancel_event.is_set():
+            raise TranscriptionCancelled()
+        self.transcribe_calls += 1
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
@@ -239,7 +249,48 @@ def test_stop_requested_before_preview_worker_starts_is_serialized(
     tmp_path: Path,
 ) -> None:
     controller, recognizer, recorder, paster, view, repository = _controller(
-        tmp_path, ["preview", "final"]
+        tmp_path, ["final"]
+    )
+    runner = DeferredRunner()
+    machine = StateMachine()
+    session = VoiceSession(machine, recorder, recognizer, paster)
+    controller = AppController(
+        machine=machine,
+        settings=Settings(),
+        settings_repository=repository,
+        recognizer=recognizer,
+        session=session,
+        view=view,
+        task_runner=runner,
+        foreground_window=lambda: 321,
+    )
+    controller.start()
+    runner.complete_next()
+    controller.toggle_recording()
+    controller.request_preview()
+    controller.request_preview()
+
+    controller.toggle_recording()
+
+    assert view.states[-1] is AppState.FINALIZING
+    assert view.timers_stopped == 1
+    assert len(runner.tasks) == 1
+    assert recorder.seal_calls == 1
+    assert not recorder.started
+    assert view.timers_stopped == 1
+    runner.complete_next()
+    assert len(runner.tasks) == 1
+    assert recognizer.transcribe_calls == 0
+    assert view.previews == []
+    assert view.warnings == []
+    runner.complete_next()
+    assert paster.calls == [("final", 321)]
+    assert controller.state is AppState.READY
+
+
+def test_busy_preview_keeps_only_one_latest_follow_up(tmp_path: Path) -> None:
+    controller, recognizer, recorder, paster, view, repository = _controller(
+        tmp_path, ["first", "latest"]
     )
     runner = DeferredRunner()
     machine = StateMachine()
@@ -259,19 +310,20 @@ def test_stop_requested_before_preview_worker_starts_is_serialized(
     controller.toggle_recording()
     controller.request_preview()
 
-    controller.toggle_recording()
+    controller.request_preview()
+    controller.request_preview()
 
-    assert view.states[-1] is AppState.FINALIZING
-    assert view.timers_stopped == 1
-    assert len(runner.tasks) == 1
-    assert recorder.seal_calls == 1
-    assert not recorder.started
-    assert view.timers_stopped == 1
-    runner.complete_next()
     assert len(runner.tasks) == 1
     runner.complete_next()
-    assert paster.calls == [("final", 321)]
-    assert controller.state is AppState.READY
+    assert view.previews == ["first"]
+    assert len(runner.tasks) == 1
+
+    runner.complete_next()
+
+    assert recognizer.transcribe_calls == 2
+    assert view.previews == ["first", "latest"]
+    assert runner.tasks == []
+    assert controller.state is AppState.RECORDING
 
 
 def test_nonfatal_capture_warning_is_reported_after_result(

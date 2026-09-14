@@ -1,5 +1,15 @@
 # Stable-prefix final recognition implementation plan
 
+> **Historical plan:** This plan records the original implementation based on
+> three matching previews, an 8-second overlap, and temporary WAV files. The
+> current implementation uses in-memory `AudioArtifact` objects, immediately
+> confirms all complete sentences before the last sentence, defaults to a
+> configurable 5-second overlap, cancels stale preview inference, and uses a
+> one-slot latest-wins scheduler. See
+> `docs/superpowers/specs/2026-09-13-stable-prefix-finalization-design.md`,
+> `REQUIREMENTS.md`, and the current tests for authoritative behavior. Do not
+> execute the steps below against the current codebase.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Reduce stop-to-paste latency by recognizing only an overlapped audio tail when three previews establish a stable sentence prefix, while retaining full-audio fallback and retry.

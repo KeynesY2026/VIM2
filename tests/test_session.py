@@ -1,4 +1,5 @@
 from pathlib import Path
+import threading
 
 import numpy as np
 import pytest
@@ -77,7 +78,15 @@ class FakeRecognizer:
         self.responses = responses
         self.calls: list[tuple[AudioArtifact, ModelId]] = []
 
-    def transcribe(self, artifact: AudioArtifact, model_id: ModelId) -> str:
+    def transcribe(
+        self,
+        artifact: AudioArtifact,
+        model_id: ModelId,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> str:
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("cancelled")
         self.calls.append((artifact, model_id))
         response = self.responses.pop(0)
         if isinstance(response, Exception):
@@ -153,7 +162,11 @@ def test_failed_recognition_retains_audio_and_retry_uses_original_model(
     recorder = FakeRecorder(artifact)
     recognizer = FakeRecognizer([RuntimeError("CUDA OOM"), "retry result"])
     session = VoiceSession(
-        _ready_machine(), recorder, recognizer, FakePaster()
+        _ready_machine(),
+        recorder,
+        recognizer,
+        FakePaster(),
+        tail_overlap_seconds=5,
     )
     session.start(target_window=7, model_id=ModelId.ACCURATE)
 
@@ -194,7 +207,11 @@ def test_live_preview_uses_selected_model_and_keeps_recording(
     recorder = FakeRecorder(_artifact(tmp_path))
     recognizer = FakeRecognizer(["临时文本"])
     session = VoiceSession(
-        _ready_machine(), recorder, recognizer, FakePaster()
+        _ready_machine(),
+        recorder,
+        recognizer,
+        FakePaster(),
+        tail_overlap_seconds=5,
     )
     session.start(target_window=7, model_id=ModelId.ACCURATE)
 
@@ -204,6 +221,34 @@ def test_live_preview_uses_selected_model_and_keeps_recording(
     assert recognizer.calls[0][1] is ModelId.ACCURATE
     assert recognizer.calls[0][0] in recorder.discarded
     assert session.state is AppState.RECORDING
+
+
+def test_live_preview_uses_stable_checkpoint_tail_before_window_limit(
+    tmp_path: Path,
+) -> None:
+    recorder = FakeRecorder(_long_artifact(tmp_path))
+    recorder.snapshots = [
+        AudioArtifact(np.zeros(144_000, dtype=np.float32), 16_000)
+    ]
+    recognizer = FakeRecognizer(
+        [
+            "第一句。第二句。第三句还没说完",
+            "第一句。第二句。第三句。第四句还没说完",
+        ]
+    )
+    session = VoiceSession(
+        _ready_machine(), recorder, recognizer, FakePaster()
+    )
+    session.start(target_window=7, model_id=ModelId.ACCURATE)
+
+    assert session.preview() == "第一句。第二句。第三句还没说完"
+    assert session.preview() == "第一句。第二句。第三句。第四句还没说完"
+
+    complete, start_frame, tail = recorder.slices[-1]
+    assert complete.frame_count == 176_000
+    assert start_frame == 80_000
+    assert tail.frame_count == 96_000
+    assert recognizer.calls[-1] == (tail, ModelId.ACCURATE)
 
 
 def test_long_live_preview_only_transcribes_bounded_recent_audio(
@@ -259,7 +304,11 @@ def test_bounded_preview_merges_an_exact_stable_sentence_anchor(
         session.preview()
 
     assert session.preview() == "第一句。第二句。"
-    assert recognizer.calls[-1][0].duration_seconds == MAX_PREVIEW_SECONDS
+    complete, start_frame, tail = recorder.slices[-1]
+    assert complete.duration_seconds == 13
+    assert start_frame == 112_000
+    assert tail.duration_seconds == 6
+    assert recognizer.calls[-1][0] is tail
 
 
 def test_stop_after_live_preview_transcribes_complete_recording(
@@ -306,7 +355,7 @@ def test_stable_prefix_uses_overlapped_tail_for_final_result(
     assert result == "第一句。最后一段。"
     complete, start_frame, tail = recorder.slices[-1]
     assert complete == artifact
-    assert start_frame == 560_000
+    assert start_frame == 608_000
     assert recognizer.calls[-1] == (tail, ModelId.FAST)
     assert paster.calls == [("第一句。最后一段。", 7)]
     assert tail in recorder.discarded
@@ -550,7 +599,7 @@ def test_tail_over_ratio_limit_uses_complete_recording(
     artifact = AudioArtifact(np.zeros(320_000, dtype=np.float32), 16_000)
     recorder = FakeRecorder(artifact)
     recorder.snapshots = [
-        AudioArtifact(np.zeros(160_000, dtype=np.float32), 16_000)
+        AudioArtifact(np.zeros(112_000, dtype=np.float32), 16_000)
     ]
     recognizer = FakeRecognizer(
         ["第一句。未完成", "第一句。变化", "第一句。继续", "完整结果。"]

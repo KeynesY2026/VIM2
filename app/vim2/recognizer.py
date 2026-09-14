@@ -15,6 +15,24 @@ class ModelSwitchError(RuntimeError):
     pass
 
 
+class TranscriptionCancelled(RuntimeError):
+    pass
+
+
+class _CancellationStoppingCriteria:
+    def __init__(self, cancel_event: threading.Event) -> None:
+        self._cancel_event = cancel_event
+
+    def __call__(self, input_ids, scores, **kwargs):
+        del scores, kwargs
+        cancelled = self._cancel_event.is_set()
+        if input_ids is None:
+            return cancelled
+        return input_ids.new_full(
+            (input_ids.shape[0],), cancelled
+        ).bool()
+
+
 def enforce_offline_environment() -> None:
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -131,9 +149,15 @@ class QwenRecognizer:
                 ) from switch_error
 
     def transcribe(
-        self, audio: AudioArtifact | Path, model_id: ModelId
+        self,
+        audio: AudioArtifact | Path,
+        model_id: ModelId,
+        *,
+        cancel_event: threading.Event | None = None,
     ) -> str:
         with self._lock:
+            if cancel_event is not None and cancel_event.is_set():
+                raise TranscriptionCancelled()
             if self._model is None or self._loaded_model is not model_id:
                 raise RuntimeError(
                     f"{MODEL_SPECS[model_id].display_name} is not loaded"
@@ -143,7 +167,35 @@ class QwenRecognizer:
                 model_audio = (audio.samples, audio.sample_rate)
             else:
                 model_audio = str(audio)
-            results = self._model.transcribe(audio=model_audio, language=None)
+            generation_model = getattr(self._model, "model", None)
+            original_generate = None
+            if cancel_event is not None and generation_model is not None:
+                original_generate = generation_model.generate
+                stopping_criterion = _CancellationStoppingCriteria(
+                    cancel_event
+                )
+
+                def cancellable_generate(*args, **kwargs):
+                    stopping_criteria = list(
+                        kwargs.pop("stopping_criteria", None) or ()
+                    )
+                    stopping_criteria.append(stopping_criterion)
+                    return original_generate(
+                        *args,
+                        stopping_criteria=stopping_criteria,
+                        **kwargs,
+                    )
+
+                generation_model.generate = cancellable_generate
+            try:
+                results = self._model.transcribe(
+                    audio=model_audio, language=None
+                )
+            finally:
+                if original_generate is not None:
+                    generation_model.generate = original_generate
+            if cancel_event is not None and cancel_event.is_set():
+                raise TranscriptionCancelled()
             if not results:
                 raise RuntimeError("Qwen3-ASR returned no recognition result")
             text = results[0].text

@@ -134,7 +134,13 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
     paster = WindowsClipboardPaster(
         wait_until_hotkey_released=hotkey.wait_until_released
     )
-    session = VoiceSession(machine, recorder, recognizer, paster)
+    session = VoiceSession(
+        machine,
+        recorder,
+        recognizer,
+        paster,
+        tail_overlap_seconds=settings.tail_overlap_seconds,
+    )
     view = DesktopView()
     runner = QtTaskRunner()
     controller = AppController(

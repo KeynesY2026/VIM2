@@ -22,6 +22,23 @@ def test_three_identical_complete_prefixes_create_checkpoint() -> None:
     assert tracker.checkpoint.frame_count == 192_000
 
 
+def test_growing_preview_immediately_confirms_before_last_sentence() -> None:
+    tracker = StablePrefixTracker()
+
+    tracker.observe("第一句。第二句。第三句还没说完", 160_000)
+
+    assert tracker.checkpoint is not None
+    assert tracker.checkpoint.prefix == "第一句。"
+    assert tracker.checkpoint.anchor == "第一句。"
+    assert tracker.checkpoint.frame_count == 160_000
+
+    tracker.observe("第一句。第二句。第三句。第四句还没说完", 176_000)
+
+    assert tracker.checkpoint.prefix == "第一句。第二句。"
+    assert tracker.checkpoint.anchor == "第二句。"
+    assert tracker.checkpoint.frame_count == 176_000
+
+
 def test_text_without_sentence_ending_never_stabilizes() -> None:
     tracker = StablePrefixTracker()
     for frame_count in (16_000, 32_000, 48_000):

@@ -10,6 +10,9 @@ DEFAULT_HOTKEY = "RightAlt"
 DEFAULT_PREVIEW_INTERVAL_MS = 1_000
 MIN_PREVIEW_INTERVAL_MS = 250
 MAX_PREVIEW_INTERVAL_MS = 1_000
+DEFAULT_TAIL_OVERLAP_SECONDS = 5
+MIN_TAIL_OVERLAP_SECONDS = 1
+MAX_TAIL_OVERLAP_SECONDS = 15
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +21,7 @@ class Settings:
     hotkey: str = DEFAULT_HOTKEY
     max_recording_seconds: int = 90
     preview_interval_ms: int = DEFAULT_PREVIEW_INTERVAL_MS
+    tail_overlap_seconds: int = DEFAULT_TAIL_OVERLAP_SECONDS
 
 
 class SettingsRepository:
@@ -57,6 +61,19 @@ class SettingsRepository:
                 "preview_interval_ms must be an integer from 250 through 1000"
             )
 
+        tail_overlap_seconds = values.get(
+            "tail_overlap_seconds", DEFAULT_TAIL_OVERLAP_SECONDS
+        )
+        if (
+            not isinstance(tail_overlap_seconds, int)
+            or not MIN_TAIL_OVERLAP_SECONDS
+            <= tail_overlap_seconds
+            <= MAX_TAIL_OVERLAP_SECONDS
+        ):
+            raise ValueError(
+                "tail_overlap_seconds must be an integer from 1 through 15"
+            )
+
         hotkey = DEFAULT_HOTKEY
         if self._hotkey_path.is_file():
             hotkey = self._hotkey_path.read_text(encoding="utf-8").strip()
@@ -68,6 +85,7 @@ class SettingsRepository:
             hotkey=hotkey,
             max_recording_seconds=max_seconds,
             preview_interval_ms=preview_interval_ms,
+            tail_overlap_seconds=tail_overlap_seconds,
         )
 
     def save(self, settings: Settings) -> None:
