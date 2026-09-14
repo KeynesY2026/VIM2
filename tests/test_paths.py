@@ -10,6 +10,7 @@ def test_all_portable_paths_are_resolved_from_application_root(tmp_path: Path) -
 
     assert paths.root == root.resolve()
     assert paths.config_dir == root.resolve() / "config"
+    assert paths.hotwords_file == root.resolve() / "config" / "hotwords.txt"
     assert paths.runtime_dir == root.resolve() / "runtime"
     assert paths.models_dir == root.resolve() / ".models"
     assert paths.temp_dir == root.resolve() / "temp"

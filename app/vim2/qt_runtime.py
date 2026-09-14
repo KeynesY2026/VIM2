@@ -5,8 +5,10 @@ import logging
 import os
 import sys
 from collections.abc import Callable
+from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from vim2.application import SingleInstanceGuard
@@ -94,6 +96,10 @@ def _foreground_window() -> int:
     return int(user32.GetForegroundWindow() or 0)
 
 
+def _open_local_file(path: Path) -> bool:
+    return QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+
 def _restart_process(paths: AppPaths) -> None:
     os.execv(
         sys.executable,
@@ -173,6 +179,7 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
         task_runner=runner,
         foreground_window=_foreground_window,
         restart_application=lambda: app.exit(RESTART_EXIT_CODE),
+        open_hotwords_file=lambda: _open_local_file(paths.hotwords_file),
     )
     bridge.toggle_requested.connect(controller.toggle_recording)
     bridge.cancel_requested.connect(controller.cancel)

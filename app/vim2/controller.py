@@ -5,6 +5,7 @@ import threading
 from typing import Callable, Protocol
 
 from vim2.config import Settings
+from vim2.hotwords import HotwordSnapshot
 from vim2.models import MODEL_SPECS, ModelId
 from vim2.recognizer import TranscriptionCancelled
 from vim2.session import FinalRecognitionError, VoiceSession
@@ -16,11 +17,16 @@ class SettingsWriter(Protocol):
 
 
 class ModelLifecycle(Protocol):
+    @property
+    def loaded_model(self) -> ModelId | None: ...
+
     def load(self, model_id: ModelId) -> None: ...
 
     def switch(self, model_id: ModelId) -> None: ...
 
     def unload(self) -> None: ...
+
+    def reload_hotwords(self) -> HotwordSnapshot: ...
 
 
 class ControllerView(Protocol):
@@ -40,6 +46,8 @@ class ControllerView(Protocol):
     def show_error(self, message: str) -> None: ...
 
     def show_warning(self, message: str) -> None: ...
+
+    def show_info(self, message: str) -> None: ...
 
     def show_retry_error(self, message: str) -> None: ...
 
@@ -68,6 +76,7 @@ class AppController:
         task_runner: TaskRunner,
         foreground_window: Callable[[], int],
         restart_application: Callable[[], None] = lambda: None,
+        open_hotwords_file: Callable[[], bool] = lambda: False,
     ) -> None:
         self._machine = machine
         self._settings = settings
@@ -78,6 +87,7 @@ class AppController:
         self._runner = task_runner
         self._foreground_window = foreground_window
         self._restart_application = restart_application
+        self._open_hotwords_file = open_hotwords_file
         self._preview_busy = False
         self._preview_pending = False
         self._preview_cancel_event: threading.Event | None = None
@@ -271,6 +281,38 @@ class AppController:
             self._on_final_error,
         )
 
+    def reload_hotwords(self) -> None:
+        if self.state is not AppState.READY or self._operation_busy:
+            return
+        self._operation_busy = True
+        self._runner.submit(
+            self._recognizer.reload_hotwords,
+            self._on_hotwords_reloaded,
+            self._on_hotword_reload_error,
+        )
+
+    def _on_hotwords_reloaded(self, result: object) -> None:
+        self._operation_busy = False
+        if not isinstance(result, HotwordSnapshot):
+            self._view.show_error("重新加载热词失败：返回了无效结果。")
+            return
+        self._view.show_info(f"已重新加载 {len(result.entries)} 个热词。")
+
+    def _on_hotword_reload_error(self, error: Exception) -> None:
+        self._operation_busy = False
+        self._view.show_error(
+            "重新加载热词失败，继续使用上次成功的词表："
+            f"{error}"
+        )
+
+    def open_hotwords_file(self) -> None:
+        try:
+            opened = self._open_hotwords_file()
+        except (OSError, RuntimeError):
+            opened = False
+        if not opened:
+            self._view.show_error("无法打开热词文件。")
+
     def switch_model(self, model_id: ModelId) -> None:
         if (
             self.state is not AppState.READY
@@ -309,7 +351,12 @@ class AppController:
 
     def _on_model_switch_error(self, error: Exception) -> None:
         self._operation_busy = False
-        self._machine.transition_to(AppState.READY)
+        next_state = (
+            AppState.READY
+            if self._recognizer.loaded_model is self.selected_model
+            else AppState.ERROR
+        )
+        self._machine.transition_to(next_state)
         self._render()
         self._view.show_error(f"模型切换失败：{error}")
 

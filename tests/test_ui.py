@@ -204,6 +204,23 @@ def test_tray_menu_supports_cpu_model() -> None:
     assert not view.accurate_model_action.isChecked()
 
 
+def test_tray_menu_exposes_hotword_file_and_ready_only_reload() -> None:
+    _app()
+    view = DesktopView()
+
+    view.render_state(AppState.READY, model_id=ModelId.FAST)
+
+    assert view.open_hotwords_action.text() == "打开热词文件"
+    assert view.reload_hotwords_action.text() == "重新加载热词"
+    assert view.open_hotwords_action.isEnabled()
+    assert view.reload_hotwords_action.isEnabled()
+
+    view.render_state(AppState.RECORDING, model_id=ModelId.FAST)
+
+    assert view.open_hotwords_action.isEnabled()
+    assert not view.reload_hotwords_action.isEnabled()
+
+
 def test_live_preview_timer_uses_configured_interval() -> None:
     _app()
     view = DesktopView()

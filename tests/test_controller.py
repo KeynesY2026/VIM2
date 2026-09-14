@@ -6,6 +6,7 @@ import numpy as np
 from vim2.audio import AudioArtifact
 from vim2.config import Settings
 from vim2.controller import AppController
+from vim2.hotwords import HotwordSnapshot
 from vim2.models import ModelId
 from vim2.recognizer import TranscriptionCancelled
 from vim2.session import VoiceSession
@@ -44,17 +45,33 @@ class FakeLifecycleRecognizer:
         self.responses = responses or []
         self.loaded: list[ModelId] = []
         self.switched: list[ModelId] = []
+        self.loaded_model: ModelId | None = None
         self.unloaded = False
         self.transcribe_calls = 0
+        self.reload_calls = 0
+        self.reload_error: Exception | None = None
+        self.switch_error: Exception | None = None
 
     def load(self, model_id: ModelId) -> None:
         self.loaded.append(model_id)
+        self.loaded_model = model_id
 
     def switch(self, model_id: ModelId) -> None:
         self.switched.append(model_id)
+        if self.switch_error is not None:
+            self.loaded_model = None
+            raise self.switch_error
+        self.loaded_model = model_id
 
     def unload(self) -> None:
         self.unloaded = True
+        self.loaded_model = None
+
+    def reload_hotwords(self) -> HotwordSnapshot:
+        self.reload_calls += 1
+        if self.reload_error is not None:
+            raise self.reload_error
+        return HotwordSnapshot(("VIM2", "Qwen"))
 
     def transcribe(
         self,
@@ -124,6 +141,7 @@ class FakeView:
         self.previews: list[str] = []
         self.errors: list[str] = []
         self.warnings: list[str] = []
+        self.infos: list[str] = []
         self.retry_errors: list[str] = []
         self.timers_started: list[int] = []
         self.preview_intervals: list[int] = []
@@ -153,6 +171,9 @@ class FakeView:
 
     def show_warning(self, message: str) -> None:
         self.warnings.append(message)
+
+    def show_info(self, message: str) -> None:
+        self.infos.append(message)
 
     def show_retry_error(self, message: str) -> None:
         self.retry_errors.append(message)
@@ -224,6 +245,85 @@ def test_startup_loads_selected_model_before_enabling_recording(
     assert view.states[:2] == [AppState.MODEL_LOADING, AppState.READY]
 
 
+def test_hotword_reload_blocks_recording_until_snapshot_is_ready(
+    tmp_path: Path,
+) -> None:
+    controller, recognizer, recorder, paster, view, repository = _controller(
+        tmp_path, []
+    )
+    runner = DeferredRunner()
+    machine = StateMachine()
+    controller = AppController(
+        machine=machine,
+        settings=Settings(),
+        settings_repository=repository,
+        recognizer=recognizer,
+        session=VoiceSession(machine, recorder, recognizer, paster),
+        view=view,
+        task_runner=runner,
+        foreground_window=lambda: 321,
+    )
+    controller.start()
+    runner.complete_next()
+
+    controller.reload_hotwords()
+    controller.toggle_recording()
+
+    assert not recorder.started
+    runner.complete_next()
+    assert recognizer.reload_calls == 1
+    assert view.infos == ["已重新加载 2 个热词。"]
+    controller.toggle_recording()
+    assert recorder.started
+
+
+def test_hotword_reload_is_ignored_during_recording(tmp_path: Path) -> None:
+    controller, recognizer, _, _, _, _ = _controller(tmp_path, [])
+    controller.start()
+    controller.toggle_recording()
+
+    controller.reload_hotwords()
+
+    assert recognizer.reload_calls == 0
+
+
+def test_failed_hotword_reload_reports_previous_snapshot_is_retained(
+    tmp_path: Path,
+) -> None:
+    controller, recognizer, _, _, view, _ = _controller(tmp_path, [])
+    controller.start()
+    recognizer.reload_error = ValueError("line 2 contains an ASCII comma")
+
+    controller.reload_hotwords()
+
+    assert view.errors == [
+        "重新加载热词失败，继续使用上次成功的词表："
+        "line 2 contains an ASCII comma"
+    ]
+
+
+def test_open_hotword_file_reports_platform_failure(tmp_path: Path) -> None:
+    controller, recognizer, recorder, paster, view, repository = _controller(
+        tmp_path, []
+    )
+    machine = StateMachine()
+    controller = AppController(
+        machine=machine,
+        settings=Settings(),
+        settings_repository=repository,
+        recognizer=recognizer,
+        session=VoiceSession(machine, recorder, recognizer, paster),
+        view=view,
+        task_runner=ImmediateRunner(),
+        foreground_window=lambda: 321,
+        open_hotwords_file=lambda: False,
+    )
+
+    controller.open_hotwords_file()
+
+    assert view.errors == ["无法打开热词文件。"]
+
+
 def test_record_preview_and_final_result_flow(tmp_path: Path) -> None:
     controller, _, recorder, paster, view, _ = _controller(
         tmp_path, ["临时文本", "最终文本"]
@@ -273,6 +373,21 @@ def test_model_switch_persists_only_after_success(tmp_path: Path) -> None:
     assert view.rendered_models[switching_index] is ModelId.ACCURATE
     assert repository.saved[-1].selected_model is ModelId.ACCURATE
     assert controller.state is AppState.READY
+
+
+def test_failed_model_switch_without_resident_model_enters_error(
+    tmp_path: Path,
+) -> None:
+    controller, recognizer, _, _, view, _ = _controller(tmp_path, [])
+    controller.start()
+    recognizer.switch_error = RuntimeError("switch and restore failed")
+
+    controller.switch_model(ModelId.ACCURATE)
+
+    assert controller.state is AppState.ERROR
+    assert view.errors == [
+        "模型切换失败：switch and restore failed"
+    ]
 
 
 def test_stop_requested_before_preview_worker_starts_is_serialized(

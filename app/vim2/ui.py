@@ -370,6 +370,8 @@ class DesktopView:
             self.accurate_model_action,
         ):
             action.setCheckable(True)
+        self.open_hotwords_action = QAction("打开热词文件")
+        self.reload_hotwords_action = QAction("重新加载热词")
         self.about_action = QAction("关于")
         self.exit_action = QAction("退出")
 
@@ -380,6 +382,9 @@ class DesktopView:
         self.model_menu.addSeparator()
         self.model_menu.addAction(self.fast_model_action)
         self.model_menu.addAction(self.accurate_model_action)
+        self.menu.addSeparator()
+        self.menu.addAction(self.open_hotwords_action)
+        self.menu.addAction(self.reload_hotwords_action)
         self.menu.addSeparator()
         self.menu.addAction(self.about_action)
         self.menu.addAction(self.exit_action)
@@ -415,6 +420,12 @@ class DesktopView:
         self.accurate_model_action.triggered.connect(
             lambda: controller.switch_model(ModelId.ACCURATE)
         )
+        self.open_hotwords_action.triggered.connect(
+            controller.open_hotwords_file
+        )
+        self.reload_hotwords_action.triggered.connect(
+            controller.reload_hotwords
+        )
         self.about_action.triggered.connect(self._show_about)
         self.exit_action.triggered.connect(quit_callback)
         self.tray.activated.connect(self._on_tray_activated)
@@ -441,6 +452,7 @@ class DesktopView:
         self.cpu_model_action.setChecked(model_id is ModelId.CPU)
         self.fast_model_action.setChecked(model_id is ModelId.FAST)
         self.accurate_model_action.setChecked(model_id is ModelId.ACCURATE)
+        self.reload_hotwords_action.setEnabled(state is AppState.READY)
 
         if state is AppState.MODEL_LOADING:
             self.overlay.set_message(
@@ -497,6 +509,14 @@ class DesktopView:
             "VIM2",
             message,
             QSystemTrayIcon.MessageIcon.Warning,
+            5000,
+        )
+
+    def show_info(self, message: str) -> None:
+        self.tray.showMessage(
+            "VIM2",
+            message,
+            QSystemTrayIcon.MessageIcon.Information,
             5000,
         )
 

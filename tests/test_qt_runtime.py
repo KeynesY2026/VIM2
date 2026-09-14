@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -108,3 +109,21 @@ def test_model_runtime_initializes_on_ui_thread_after_tray_is_visible() -> None:
         "runtime initialized",
         "background model load started",
     ]
+
+
+def test_open_local_file_uses_qt_file_url(
+    tmp_path: Path, monkeypatch
+) -> None:
+    opened = []
+    monkeypatch.setattr(
+        qt_runtime.QDesktopServices,
+        "openUrl",
+        lambda url: opened.append(url) or True,
+    )
+    path = tmp_path / "配置 空格" / "hotwords.txt"
+
+    result = qt_runtime._open_local_file(path)
+
+    assert result is True
+    assert opened[0].isLocalFile()
+    assert Path(opened[0].toLocalFile()) == path
