@@ -6,6 +6,7 @@ from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
 import vim2.qt_runtime as qt_runtime
+from vim2.models import ModelId
 from vim2.qt_runtime import QtTaskRunner
 
 
@@ -69,10 +70,13 @@ def test_model_runtime_initializes_on_ui_thread_after_tray_is_visible() -> None:
             events.append("tray shown")
 
     class Recognizer:
-        def initialize_runtime(self) -> None:
+        def initialize_runtime(self, model_id: ModelId) -> None:
+            assert model_id is ModelId.CPU
             events.append("runtime initialized")
 
     class Controller:
+        selected_model = ModelId.CPU
+
         def start(self) -> None:
             events.append("background model load started")
 

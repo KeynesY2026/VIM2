@@ -34,6 +34,8 @@ def test_release_preparation_uses_fixed_local_model_snapshots() -> None:
     assert "5eb144179a02acc5e5ba31e748d22b0cf3e303b0" in script
     assert "models--Qwen--Qwen3-ASR-1.7B" in script
     assert "7278e1e70fe206f11671096ffdd38061171dd6e5" in script
+    assert "Test-SherpaModelComplete" in script
+    assert "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25" in script
     assert "--target" not in script
     assert "runtime\\site-packages" not in script
     assert "pip install" not in script.lower()
@@ -53,6 +55,17 @@ def test_release_manifest_and_dependency_lock_agree() -> None:
     assert "transformers==4.57.6" in lock
     assert manifest["runtime"]["bitsandbytes"] == "0.48.2"
     assert "bitsandbytes==0.48.2" in lock
+    assert manifest["runtime"]["sherpa-onnx"] == "1.13.8"
+    assert "sherpa-onnx==1.13.8" in lock
+    assert manifest["models"]["qwen3-asr-0.6b-int8-cpu"] == {
+        "directory": (
+            ".models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
+        ),
+        "model_id": "zengshuishui/Qwen3-ASR-onnx",
+        "precision": "ONNX INT8 (sherpa-onnx CPU provider)",
+        "revision": "2026-03-25",
+    }
+    assert "qwen3-asr-0.6b-int8" not in manifest["models"]
 
 
 def test_model_checksum_manifest_is_utf8_json() -> None:
@@ -63,3 +76,7 @@ def test_model_checksum_manifest_is_utf8_json() -> None:
     assert checksums[".models\\Qwen3-ASR-0.6B\\model.safetensors"] == (
         "79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea"
     )
+    assert checksums[
+        ".models\\sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
+        "\\decoder.int8.onnx"
+    ] == "4f6885be5959ae26af3089d38ee7972c5fafbeeb1cf8d5e76eab6d8b61ca5771"

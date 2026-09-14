@@ -54,6 +54,15 @@ def test_settings_round_trip_in_portable_config_directory(tmp_path: Path) -> Non
     }
 
 
+def test_cpu_model_can_be_selected(tmp_path: Path) -> None:
+    repository = SettingsRepository(tmp_path / "config")
+    settings = Settings(selected_model=ModelId.CPU)
+
+    repository.save(settings)
+
+    assert repository.load().selected_model is ModelId.CPU
+
+
 def test_invalid_model_configuration_is_reported(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()

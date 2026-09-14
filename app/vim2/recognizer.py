@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from vim2.audio import AudioArtifact
-from vim2.models import MODEL_SPECS, ModelId
+from vim2.models import MODEL_SPECS, ModelBackend, ModelId, ModelSpec
 from vim2.paths import AppPaths
 
 
@@ -46,12 +46,14 @@ class QwenRecognizer:
         torch_module: Any | None = None,
         model_class: Any | None = None,
         bits_config_class: Any | None = None,
+        sherpa_module: Any | None = None,
     ) -> None:
         enforce_offline_environment()
         self._paths = paths
         self._torch = torch_module
         self._model_class = model_class
         self._bits_config_class = bits_config_class
+        self._sherpa = sherpa_module
         self._model: Any | None = None
         self._loaded_model: ModelId | None = None
         self._lock = threading.RLock()
@@ -68,31 +70,56 @@ class QwenRecognizer:
                 raise RuntimeError(
                     "Unload the resident model before loading another model"
                 )
-            self.initialize_runtime()
-            if not self._torch.cuda.is_available():
-                raise RuntimeError(
-                    "CUDA is unavailable; install a compatible NVIDIA driver "
-                    "and confirm that the GPU is enabled."
-                )
             spec = MODEL_SPECS[model_id]
-            kwargs: dict[str, object] = {
-                "device_map": "cuda:0",
-                "dtype": self._torch.float16,
-                "attn_implementation": "sdpa",
-                "max_inference_batch_size": 1,
-                "max_new_tokens": 512,
-            }
-            if spec.load_in_8bit:
-                kwargs["quantization_config"] = self._bits_config_class(
-                    load_in_8bit=True
-                )
-            model_path = self._paths.models_dir / spec.directory_name
-            self._model = self._model_class.from_pretrained(
-                str(model_path), **kwargs
-            )
+            self.initialize_runtime(model_id)
+            if spec.backend is ModelBackend.SHERPA_ONNX_CPU:
+                self._load_sherpa_model(spec)
+            else:
+                self._load_qwen_model(spec)
             self._loaded_model = model_id
 
-    def initialize_runtime(self) -> None:
+    def _load_qwen_model(self, spec: ModelSpec) -> None:
+        if not self._torch.cuda.is_available():
+            raise RuntimeError(
+                "CUDA is unavailable; install a compatible NVIDIA driver "
+                "and confirm that the GPU is enabled."
+            )
+        kwargs: dict[str, object] = {
+            "device_map": "cuda:0",
+            "dtype": self._torch.float16,
+            "attn_implementation": "sdpa",
+            "max_inference_batch_size": 1,
+            "max_new_tokens": 512,
+        }
+        if spec.load_in_8bit:
+            kwargs["quantization_config"] = self._bits_config_class(
+                load_in_8bit=True
+            )
+        model_path = self._paths.models_dir / spec.directory_name
+        self._model = self._model_class.from_pretrained(
+            str(model_path), **kwargs
+        )
+
+    def _load_sherpa_model(self, spec: ModelSpec) -> None:
+        model_path = self._paths.models_dir / spec.directory_name
+        self._model = self._sherpa.OfflineRecognizer.from_qwen3_asr(
+            conv_frontend=str(model_path / "conv_frontend.onnx"),
+            encoder=str(model_path / "encoder.int8.onnx"),
+            decoder=str(model_path / "decoder.int8.onnx"),
+            tokenizer=str(model_path / "tokenizer"),
+            num_threads=2,
+            provider="cpu",
+            max_total_len=1024,
+            max_new_tokens=512,
+        )
+
+    def initialize_runtime(self, model_id: ModelId = ModelId.FAST) -> None:
+        if MODEL_SPECS[model_id].backend is ModelBackend.SHERPA_ONNX_CPU:
+            if self._sherpa is None:
+                import sherpa_onnx
+
+                self._sherpa = sherpa_onnx
+            return
         if self._torch is None:
             import torch
 
@@ -110,11 +137,17 @@ class QwenRecognizer:
         with self._lock:
             if self._model is None:
                 return
+            loaded_model = self._loaded_model
             self._model = None
             self._loaded_model = None
             gc.collect()
-            self._torch.cuda.empty_cache()
-            self._torch.cuda.ipc_collect()
+            if (
+                loaded_model is not None
+                and MODEL_SPECS[loaded_model].backend
+                is ModelBackend.QWEN_CUDA
+            ):
+                self._torch.cuda.empty_cache()
+                self._torch.cuda.ipc_collect()
 
     def switch(self, model_id: ModelId) -> None:
         with self._lock:
@@ -162,6 +195,11 @@ class QwenRecognizer:
                 raise RuntimeError(
                     f"{MODEL_SPECS[model_id].display_name} is not loaded"
                 )
+            if (
+                MODEL_SPECS[model_id].backend
+                is ModelBackend.SHERPA_ONNX_CPU
+            ):
+                return self._transcribe_sherpa(audio, cancel_event)
             model_audio: tuple[Any, int] | str
             if isinstance(audio, AudioArtifact):
                 model_audio = (audio.samples, audio.sample_rate)
@@ -202,3 +240,28 @@ class QwenRecognizer:
             if not isinstance(text, str):
                 raise RuntimeError("Qwen3-ASR returned an invalid text result")
             return text
+
+    def _transcribe_sherpa(
+        self,
+        audio: AudioArtifact | Path,
+        cancel_event: threading.Event | None,
+    ) -> str:
+        if isinstance(audio, AudioArtifact):
+            samples = audio.samples
+            sample_rate = audio.sample_rate
+        else:
+            import soundfile
+
+            samples, sample_rate = soundfile.read(
+                str(audio), dtype="float32", always_2d=True
+            )
+            samples = samples[:, 0]
+        stream = self._model.create_stream()
+        stream.accept_waveform(sample_rate, samples)
+        self._model.decode_stream(stream)
+        if cancel_event is not None and cancel_event.is_set():
+            raise TranscriptionCancelled()
+        text = stream.result.text
+        if not isinstance(text, str):
+            raise RuntimeError("sherpa-onnx returned an invalid text result")
+        return text

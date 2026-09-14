@@ -16,6 +16,20 @@ def _create_minimal_model(model_dir: Path) -> None:
         (model_dir / name).write_text("{}", encoding="utf-8")
 
 
+def _create_minimal_cpu_model(model_dir: Path) -> None:
+    for name in (
+        "conv_frontend.onnx",
+        "encoder.int8.onnx",
+        "decoder.int8.onnx",
+        "tokenizer/merges.txt",
+        "tokenizer/tokenizer_config.json",
+        "tokenizer/vocab.json",
+    ):
+        path = model_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+
+
 def test_preflight_reports_missing_selected_model(tmp_path: Path) -> None:
     paths = AppPaths.from_root(tmp_path)
     checker = PreflightChecker(paths, python_version=(3, 13, 0))
@@ -86,4 +100,27 @@ def test_preflight_reports_missing_portable_dependencies(
         "Python dependency is missing: numpy",
         "Python dependency is missing: soundfile",
         "Python dependency is missing: transformers",
+    )
+
+
+def test_cpu_preflight_requires_sherpa_but_not_cuda_runtime(
+    tmp_path: Path,
+) -> None:
+    paths = AppPaths.from_root(tmp_path)
+    _create_minimal_cpu_model(
+        paths.models_dir / MODEL_SPECS[ModelId.CPU].directory_name
+    )
+    available = {"PySide6", "sounddevice", "numpy", "soundfile"}
+    checker = PreflightChecker(
+        paths,
+        python_version=(3, 13, 0),
+        dependency_finder=lambda name: (
+            object() if name in available else None
+        ),
+    )
+
+    result = checker.check(ModelId.CPU, check_cuda=True)
+
+    assert result.errors == (
+        "Python dependency is missing: sherpa_onnx",
     )

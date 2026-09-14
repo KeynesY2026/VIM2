@@ -4,6 +4,12 @@
     "version": "0.1.0"
   },
   "models": {
+    "qwen3-asr-0.6b-int8-cpu": {
+      "directory": ".models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
+      "model_id": "zengshuishui/Qwen3-ASR-onnx",
+      "precision": "ONNX INT8 (sherpa-onnx CPU provider)",
+      "revision": "2026-03-25"
+    },
     "qwen3-asr-0.6b-fp16": {
       "directory": ".models/Qwen3-ASR-0.6B",
       "model_id": "Qwen/Qwen3-ASR-0.6B",
@@ -28,6 +34,7 @@
     "bitsandbytes": "0.48.2",
     "PySide6": "6.10.0",
     "qwen-asr": "0.0.6",
+    "sherpa-onnx": "1.13.8",
     "torch": "2.11.0+cu128",
     "transformers": "4.57.6"
   }

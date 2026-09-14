@@ -10,7 +10,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Python 3.10 through 3.13 is required."
 }
 
-& $Python -c "import bitsandbytes, numpy, PySide6, qwen_asr, sounddevice, soundfile, torch, transformers"
+& $Python -c "import bitsandbytes, numpy, PySide6, qwen_asr, sherpa_onnx, sounddevice, soundfile, torch, transformers"
 if ($LASTEXITCODE -ne 0) {
     throw "Required global Python packages are missing. See requirements.lock."
 }
@@ -70,6 +70,24 @@ function Copy-ModelSnapshot {
     }
 }
 
+function Test-SherpaModelComplete {
+    param([string]$Path)
+    $Files = @(
+        "conv_frontend.onnx",
+        "encoder.int8.onnx",
+        "decoder.int8.onnx",
+        "tokenizer\merges.txt",
+        "tokenizer\tokenizer_config.json",
+        "tokenizer\vocab.json"
+    )
+    foreach ($Name in $Files) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Path $Name))) {
+            return $false
+        }
+    }
+    return $true
+}
+
 New-Item -ItemType Directory -Force -Path (Join-Path $Root ".models") |
     Out-Null
 Copy-ModelSnapshot `
@@ -80,6 +98,11 @@ Copy-ModelSnapshot `
     -CacheName "models--Qwen--Qwen3-ASR-1.7B" `
     -Revision "7278e1e70fe206f11671096ffdd38061171dd6e5" `
     -DestinationName "Qwen3-ASR-1.7B-INT8"
+$SherpaModel = Join-Path $Root `
+    ".models\sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
+if (-not (Test-SherpaModelComplete -Path $SherpaModel)) {
+    throw "Complete sherpa-onnx CPU model was not found: $SherpaModel"
+}
 
 $FilesToHash = Get-ChildItem -LiteralPath (Join-Path $Root ".models") `
     -File -Recurse

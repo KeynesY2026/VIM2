@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Sequence
 
 import soundfile
-import torch
 
 from vim2.benchmarking import (
     NvidiaSmiMonitor,
@@ -14,7 +13,7 @@ from vim2.benchmarking import (
     select_peak_vram,
     summarize_sample,
 )
-from vim2.models import ModelId
+from vim2.models import MODEL_SPECS, ModelBackend, ModelId
 from vim2.paths import AppPaths
 from vim2.recognizer import QwenRecognizer
 
@@ -37,17 +36,27 @@ def run(argv: Sequence[str] | None = None) -> int:
         raise FileNotFoundError(f"Audio file does not exist: {missing[0]}")
 
     recognizer = QwenRecognizer(AppPaths.from_root(args.root))
-    monitor = NvidiaSmiMonitor()
-    monitor.start()
-    torch.cuda.reset_peak_memory_stats()
+    uses_cuda = (
+        MODEL_SPECS[args.model].backend is ModelBackend.QWEN_CUDA
+    )
+    monitor = NvidiaSmiMonitor() if uses_cuda else None
+    torch = None
+    if uses_cuda:
+        import torch as torch_module
+
+        torch = torch_module
+        monitor.start()
+        torch.cuda.reset_peak_memory_stats()
     load_started = time.perf_counter()
     try:
         recognizer.load(args.model)
-        torch.cuda.synchronize()
+        if torch is not None:
+            torch.cuda.synchronize()
         load_seconds = time.perf_counter() - load_started
 
         recognizer.transcribe(args.audio[0], args.model)
-        torch.cuda.synchronize()
+        if torch is not None:
+            torch.cuda.synchronize()
 
         samples: list[dict[str, object]] = []
         for audio_path in args.audio:
@@ -55,10 +64,12 @@ def run(argv: Sequence[str] | None = None) -> int:
             timings: list[float] = []
             texts: list[str] = []
             for _ in range(args.runs):
-                torch.cuda.synchronize()
+                if torch is not None:
+                    torch.cuda.synchronize()
                 started = time.perf_counter()
                 text = recognizer.transcribe(audio_path, args.model)
-                torch.cuda.synchronize()
+                if torch is not None:
+                    torch.cuda.synchronize()
                 timings.append(time.perf_counter() - started)
                 texts.append(text)
             samples.append(
@@ -69,15 +80,25 @@ def run(argv: Sequence[str] | None = None) -> int:
                     texts=texts,
                 )
             )
-        torch_peak_bytes = torch.cuda.max_memory_allocated()
+        torch_peak_bytes = (
+            torch.cuda.max_memory_allocated()
+            if torch is not None
+            else None
+        )
     finally:
         recognizer.unload()
-        monitor.stop()
+        if monitor is not None:
+            monitor.stop()
 
-    peak_vram_mib, measurement = select_peak_vram(
-        nvidia_smi_mib=monitor.peak_mib,
-        torch_peak_bytes=torch_peak_bytes,
-    )
+    if monitor is None:
+        peak_vram_mib, measurement = None, "not applicable (CPU)"
+        monitor_error = None
+    else:
+        peak_vram_mib, measurement = select_peak_vram(
+            nvidia_smi_mib=monitor.peak_mib,
+            torch_peak_bytes=torch_peak_bytes,
+        )
+        monitor_error = monitor.error
     total_audio = sum(
         float(sample["duration_seconds"]) for sample in samples
     )
@@ -91,9 +112,13 @@ def run(argv: Sequence[str] | None = None) -> int:
         "total_audio_seconds": total_audio,
         "rtf": total_inference / total_audio,
         "peak_vram_mib": peak_vram_mib,
-        "peak_vram_gib": peak_vram_mib / 1024,
+        "peak_vram_gib": (
+            peak_vram_mib / 1024
+            if peak_vram_mib is not None
+            else None
+        ),
         "vram_measurement": measurement,
-        "vram_monitor_error": monitor.error,
+        "vram_monitor_error": monitor_error,
         "runs_per_audio": args.runs,
         "samples": samples,
     }

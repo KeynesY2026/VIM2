@@ -355,20 +355,29 @@ class DesktopView:
         self.status_action.setEnabled(False)
         self.recording_action = QAction("开始录音")
         self.model_menu = self.menu.addMenu("识别模型")
+        self.cpu_model_action = QAction(
+            "CPU：Qwen3-ASR 0.6B INT8", self.model_menu
+        )
         self.fast_model_action = QAction(
             "快速：Qwen3-ASR 0.6B FP16", self.model_menu
         )
         self.accurate_model_action = QAction(
             "高精度：Qwen3-ASR 1.7B INT8", self.model_menu
         )
-        self.fast_model_action.setCheckable(True)
-        self.accurate_model_action.setCheckable(True)
+        for action in (
+            self.cpu_model_action,
+            self.fast_model_action,
+            self.accurate_model_action,
+        ):
+            action.setCheckable(True)
         self.about_action = QAction("关于")
         self.exit_action = QAction("退出")
 
         self.menu.addAction(self.status_action)
         self.menu.addSeparator()
         self.menu.addAction(self.recording_action)
+        self.model_menu.addAction(self.cpu_model_action)
+        self.model_menu.addSeparator()
         self.model_menu.addAction(self.fast_model_action)
         self.model_menu.addAction(self.accurate_model_action)
         self.menu.addSeparator()
@@ -397,6 +406,9 @@ class DesktopView:
         self.recording_action.triggered.connect(
             controller.toggle_recording
         )
+        self.cpu_model_action.triggered.connect(
+            lambda: controller.switch_model(ModelId.CPU)
+        )
         self.fast_model_action.triggered.connect(
             lambda: controller.switch_model(ModelId.FAST)
         )
@@ -420,8 +432,13 @@ class DesktopView:
         )
         self.recording_action.setText(self._record_action_label(state))
         self.model_menu.setEnabled(capabilities.can_switch_model)
-        self.fast_model_action.setEnabled(capabilities.can_switch_model)
-        self.accurate_model_action.setEnabled(capabilities.can_switch_model)
+        for action in (
+            self.cpu_model_action,
+            self.fast_model_action,
+            self.accurate_model_action,
+        ):
+            action.setEnabled(capabilities.can_switch_model)
+        self.cpu_model_action.setChecked(model_id is ModelId.CPU)
         self.fast_model_action.setChecked(model_id is ModelId.FAST)
         self.accurate_model_action.setChecked(model_id is ModelId.ACCURATE)
 
@@ -549,6 +566,6 @@ class DesktopView:
             None,
             "关于 VIM2",
             "VIM2 本地语音输入\n"
-            "Qwen3-ASR 0.6B FP16 / 1.7B INT8\n"
+            "Qwen3-ASR CPU / GPU 离线识别\n"
             "音频和识别文本始终保留在本机。",
         )

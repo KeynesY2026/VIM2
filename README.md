@@ -1,14 +1,15 @@
 # VIM2
 
-VIM2 是面向 Windows 10/11 x64 的本地语音输入工具。它使用官方
-Qwen3-ASR 模型在 NVIDIA GPU 上离线识别，并通过系统剪贴板和
+VIM2 是面向 Windows 10/11 x64 的本地语音输入工具。它使用
+Qwen3-ASR 模型在 NVIDIA GPU 或 CPU 上离线识别，并通过系统剪贴板和
 `SendInput` 将最终文本粘贴回录音开始时的窗口。
 
 ## 运行要求
 
 - Python 3.10-3.13（当前验证版本：Python 3.13）
 - Windows 11 x64（Windows 10 x64 为目标支持平台）
-- NVIDIA GPU；CUDA 12.8 运行时所需最低驱动版本 570.65
+- GPU 模式需要 NVIDIA GPU；CUDA 12.8 运行时所需最低驱动版本 570.65
+- CPU 模式不需要 NVIDIA GPU 或 CUDA
 - 已在全局 Python 环境安装 `requirements.lock` 中列出的依赖
 - 发布目录中已经准备好的 `.models`
 
@@ -51,8 +52,16 @@ Qwen3-ASR 模型在 NVIDIA GPU 上离线识别，并通过系统剪贴板和
 }
 ```
 
-`selected_model` 也可设为 `qwen3-asr-1.7b-int8`。1.7B 是手动选择的高精度
-模式，不参与默认实时链路。
+`selected_model` 也可设为 `qwen3-asr-0.6b-int8-cpu`（CPU）或
+`qwen3-asr-1.7b-int8`（高精度）。默认仍为 0.6B FP16；1.7B 不参与默认
+实时链路。
+
+CPU 模式使用
+`.models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25` 中的预量化 ONNX
+模型和 `sherpa-onnx` CPU provider。它是独立推理后端，不加载 Torch、
+Qwen-ASR、BitsAndBytes 或 CUDA，不改变原有两个 GPU 模式。首次使用前需
+安装锁定的 `sherpa-onnx==1.13.8`；该模型来自第三方 ONNX 转换，并非 Qwen
+官方发布的预量化 checkpoint。
 
 ## 发布准备
 
@@ -105,11 +114,16 @@ RTF 和峰值显存，并执行 `REQUIREMENTS.md` 中的门槛检查。
 
 | 模型 | 整段推理 | RTF | 峰值显存 |
 |---|---:|---:|---:|
-| 0.6B FP16 | 9.97 秒 | 0.223 | 1.80 GiB |
-| 1.7B INT8 | 44.66 秒 | 0.998 | 2.81 GiB |
+| 0.6B INT8 CPU | 23.98 秒 | 0.536 | 不适用 |
+| 0.6B FP16 | 12.51 秒 | 0.280 | 1.80 GiB |
+| 1.7B INT8 | 49.58 秒 | 1.108 | 2.81 GiB |
 
-1.7B 对真实尾段的耗时为：4 秒音频 4.22 秒、8 秒音频 6.77 秒、12 秒音频
-9.82 秒。因此 0.6B 是默认主模型；1.7B 保留为用户可选的高精度模式。
+以上结果于 2026-09-14 在同一进程隔离方案下取得，每个模型先预热，再运行
+三次并取中位数。CPU INT8 无需 GPU 且冷加载最快，但该机器上的推理速度约为
+0.6B FP16 的 52%；它应作为无 CUDA 回退模式，而不是速度优先模式。
+1.7B 对真实尾段的历史耗时为：4 秒音频 4.22 秒、8 秒音频 6.77 秒、12 秒
+音频 9.82 秒。因此
+0.6B FP16 是默认主模型；1.7B 保留为用户可选的高精度模式。
 
 ## 开发验证
 

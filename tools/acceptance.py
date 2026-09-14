@@ -15,7 +15,7 @@ from vim2.metrics import (
     calculate_accuracy,
     evaluate_acceptance,
 )
-from vim2.models import MODEL_SPECS, ModelId
+from vim2.models import MODEL_SPECS, ModelBackend, ModelId
 
 
 def _load_dataset(path: Path) -> tuple[str, list[AcceptanceSample]]:
@@ -78,7 +78,12 @@ def main() -> int:
                 f"{MODEL_SPECS[model_id].display_name}: RTF must be below 1.0."
             )
         peak = benchmark["peak_vram_gib"]
-        limit = 2.5 if model_id is ModelId.FAST else 3.8
+        if (
+            MODEL_SPECS[model_id].backend
+            is ModelBackend.SHERPA_ONNX_CPU
+        ):
+            continue
+        limit = 3.8 if model_id is ModelId.ACCURATE else 2.5
         if peak is None:
             failures.append(
                 f"{MODEL_SPECS[model_id].display_name}: peak VRAM was not measured."

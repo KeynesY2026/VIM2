@@ -89,6 +89,46 @@ class FakeBitsConfig:
         self.kwargs = kwargs
 
 
+class FakeSherpaStream:
+    def __init__(self) -> None:
+        self.waveforms: list[tuple[int, np.ndarray]] = []
+        self.result = SimpleNamespace(text="cpu recognized")
+
+    def accept_waveform(self, sample_rate: int, samples: np.ndarray) -> None:
+        self.waveforms.append((sample_rate, samples))
+
+
+class FakeSherpaRecognizer:
+    def __init__(self) -> None:
+        self.streams: list[FakeSherpaStream] = []
+        self.decoded: list[FakeSherpaStream] = []
+
+    def create_stream(self) -> FakeSherpaStream:
+        stream = FakeSherpaStream()
+        self.streams.append(stream)
+        return stream
+
+    def decode_stream(self, stream: FakeSherpaStream) -> None:
+        self.decoded.append(stream)
+
+
+class FakeSherpaFactory:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.recognizers: list[FakeSherpaRecognizer] = []
+
+    def from_qwen3_asr(self, **kwargs) -> FakeSherpaRecognizer:
+        self.calls.append(kwargs)
+        recognizer = FakeSherpaRecognizer()
+        self.recognizers.append(recognizer)
+        return recognizer
+
+
+class FakeSherpaModule:
+    def __init__(self) -> None:
+        self.OfflineRecognizer = FakeSherpaFactory()
+
+
 def _recognizer(tmp_path: Path):
     paths = AppPaths.from_root(tmp_path)
     torch = FakeTorch()
@@ -127,7 +167,7 @@ def test_fast_model_loads_local_fp16_weights(tmp_path: Path) -> None:
     assert recognizer.loaded_model is ModelId.FAST
 
 
-def test_accurate_model_uses_int8_quantization(tmp_path: Path) -> None:
+def test_accurate_model_uses_quantization(tmp_path: Path) -> None:
     recognizer, loader, _ = _recognizer(tmp_path)
 
     recognizer.load(ModelId.ACCURATE)
@@ -136,6 +176,73 @@ def test_accurate_model_uses_int8_quantization(tmp_path: Path) -> None:
     quantization = kwargs["quantization_config"]
     assert isinstance(quantization, FakeBitsConfig)
     assert quantization.kwargs == {"load_in_8bit": True}
+def test_cpu_model_uses_sherpa_onnx_without_cuda(tmp_path: Path) -> None:
+    paths = AppPaths.from_root(tmp_path)
+    torch = FakeTorch()
+    torch.cuda.available = False
+    sherpa = FakeSherpaModule()
+    recognizer = QwenRecognizer(
+        paths,
+        torch_module=torch,
+        sherpa_module=sherpa,
+    )
+
+    recognizer.load(ModelId.CPU)
+
+    model_dir = (
+        tmp_path.resolve()
+        / ".models"
+        / "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
+    )
+    assert sherpa.OfflineRecognizer.calls == [
+        {
+            "conv_frontend": str(model_dir / "conv_frontend.onnx"),
+            "encoder": str(model_dir / "encoder.int8.onnx"),
+            "decoder": str(model_dir / "decoder.int8.onnx"),
+            "tokenizer": str(model_dir / "tokenizer"),
+            "num_threads": 2,
+            "provider": "cpu",
+            "max_total_len": 1024,
+            "max_new_tokens": 512,
+        }
+    ]
+    assert recognizer.loaded_model is ModelId.CPU
+
+
+def test_cpu_model_transcribes_in_memory_audio(tmp_path: Path) -> None:
+    sherpa = FakeSherpaModule()
+    recognizer = QwenRecognizer(
+        AppPaths.from_root(tmp_path), sherpa_module=sherpa
+    )
+    recognizer.load(ModelId.CPU)
+    samples = np.array([0.1, -0.2], dtype=np.float32)
+
+    result = recognizer.transcribe(
+        AudioArtifact(samples=samples, sample_rate=16_000), ModelId.CPU
+    )
+
+    backend = sherpa.OfflineRecognizer.recognizers[0]
+    assert result == "cpu recognized"
+    assert backend.decoded == backend.streams
+    sample_rate, accepted = backend.streams[0].waveforms[0]
+    assert sample_rate == 16_000
+    assert accepted is samples
+
+
+def test_unload_cpu_model_does_not_touch_cuda(tmp_path: Path) -> None:
+    torch = FakeTorch()
+    recognizer = QwenRecognizer(
+        AppPaths.from_root(tmp_path),
+        torch_module=torch,
+        sherpa_module=FakeSherpaModule(),
+    )
+    recognizer.load(ModelId.CPU)
+
+    recognizer.unload()
+
+    assert recognizer.loaded_model is None
+    assert torch.cuda.empty_cache_calls == 0
+    assert torch.cuda.ipc_collect_calls == 0
 
 
 def test_transcribe_uses_loaded_model_and_auto_language(tmp_path: Path) -> None:
@@ -259,7 +366,7 @@ def test_constructor_does_not_import_model_runtime(
     original_import = builtins.__import__
 
     def reject_runtime_import(name, *args, **kwargs):
-        if name in {"torch", "qwen_asr", "transformers"}:
+        if name in {"torch", "qwen_asr", "sherpa_onnx", "transformers"}:
             raise AssertionError(f"eager runtime import: {name}")
         return original_import(name, *args, **kwargs)
 

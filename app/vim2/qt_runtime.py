@@ -96,7 +96,7 @@ def _prepare_desktop_runtime(
 ) -> None:
     view.show()
     app.processEvents()
-    recognizer.initialize_runtime()
+    recognizer.initialize_runtime(controller.selected_model)
     controller.start()
 
 

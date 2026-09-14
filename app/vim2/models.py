@@ -7,8 +7,14 @@ from pathlib import Path
 
 
 class ModelId(StrEnum):
+    CPU = "qwen3-asr-0.6b-int8-cpu"
     FAST = "qwen3-asr-0.6b-fp16"
     ACCURATE = "qwen3-asr-1.7b-int8"
+
+
+class ModelBackend(StrEnum):
+    QWEN_CUDA = "qwen-cuda"
+    SHERPA_ONNX_CPU = "sherpa-onnx-cpu"
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,9 +26,20 @@ class ModelSpec:
     revision: str
     torch_dtype: str
     load_in_8bit: bool
+    backend: ModelBackend = ModelBackend.QWEN_CUDA
 
 
 MODEL_SPECS = {
+    ModelId.CPU: ModelSpec(
+        model_id=ModelId.CPU,
+        display_name="Qwen3-ASR 0.6B INT8 (CPU)",
+        directory_name="sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
+        upstream_id="zengshuishui/Qwen3-ASR-onnx",
+        revision="2026-03-25",
+        torch_dtype="",
+        load_in_8bit=False,
+        backend=ModelBackend.SHERPA_ONNX_CPU,
+    ),
     ModelId.FAST: ModelSpec(
         model_id=ModelId.FAST,
         display_name="Qwen3-ASR 0.6B FP16",
@@ -49,8 +66,27 @@ _REQUIRED_METADATA = (
     "tokenizer_config.json",
 )
 
+_REQUIRED_SHERPA_FILES = (
+    "conv_frontend.onnx",
+    "encoder.int8.onnx",
+    "decoder.int8.onnx",
+    "tokenizer/merges.txt",
+    "tokenizer/tokenizer_config.json",
+    "tokenizer/vocab.json",
+)
 
-def validate_model_directory(model_dir: Path) -> list[str]:
+
+def validate_model_directory(
+    model_dir: Path,
+    backend: ModelBackend = ModelBackend.QWEN_CUDA,
+) -> list[str]:
+    if backend is ModelBackend.SHERPA_ONNX_CPU:
+        return [
+            f"missing model file: {name}"
+            for name in _REQUIRED_SHERPA_FILES
+            if not (model_dir / name).is_file()
+        ]
+
     errors = [
         f"missing model file: {name}"
         for name in _REQUIRED_METADATA

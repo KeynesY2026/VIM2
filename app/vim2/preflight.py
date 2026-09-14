@@ -5,7 +5,12 @@ from importlib.util import find_spec
 from dataclasses import dataclass
 from typing import Callable
 
-from vim2.models import MODEL_SPECS, ModelId, validate_model_directory
+from vim2.models import (
+    MODEL_SPECS,
+    ModelBackend,
+    ModelId,
+    validate_model_directory,
+)
 from vim2.paths import AppPaths
 
 
@@ -46,28 +51,38 @@ class PreflightChecker:
 
         spec = MODEL_SPECS[selected_model]
         model_dir = self._paths.models_dir / spec.directory_name
-        model_errors = validate_model_directory(model_dir)
+        model_errors = validate_model_directory(model_dir, spec.backend)
         if model_errors:
             errors.append(f"Model is incomplete: {model_dir}")
             errors.extend(model_errors)
 
         if check_runtime:
-            for module in (
-                "torch",
-                "PySide6",
-                "qwen_asr",
-                "sounddevice",
-                "bitsandbytes",
-                "numpy",
-                "soundfile",
-                "transformers",
-            ):
+            if spec.backend is ModelBackend.SHERPA_ONNX_CPU:
+                modules = (
+                    "PySide6",
+                    "sounddevice",
+                    "sherpa_onnx",
+                    "numpy",
+                    "soundfile",
+                )
+            else:
+                modules = (
+                    "torch",
+                    "PySide6",
+                    "qwen_asr",
+                    "sounddevice",
+                    "bitsandbytes",
+                    "numpy",
+                    "soundfile",
+                    "transformers",
+                )
+            for module in modules:
                 if self._dependency_finder(module) is None:
                     errors.append(
                         f"Python dependency is missing: {module}"
                     )
 
-        if check_cuda:
+        if check_cuda and spec.backend is ModelBackend.QWEN_CUDA:
             errors.extend(self._check_cuda())
 
         return PreflightResult(tuple(errors))

@@ -192,6 +192,18 @@ def test_tray_menu_reflects_state_and_selected_model() -> None:
     assert not view.fast_model_action.isEnabled()
 
 
+def test_tray_menu_supports_cpu_model() -> None:
+    _app()
+    view = DesktopView()
+
+    view.render_state(AppState.READY, model_id=ModelId.CPU)
+
+    assert view.cpu_model_action.text() == "CPU：Qwen3-ASR 0.6B INT8"
+    assert view.cpu_model_action.isChecked()
+    assert not view.fast_model_action.isChecked()
+    assert not view.accurate_model_action.isChecked()
+
+
 def test_live_preview_timer_uses_configured_interval() -> None:
     _app()
     view = DesktopView()
