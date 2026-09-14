@@ -58,6 +58,21 @@ def test_qt_task_runner_surfaces_worker_error() -> None:
     assert str(errors[0]) == "worker failed"
 
 
+def test_qt_task_runner_surfaces_unexpected_worker_exception() -> None:
+    runner = QtTaskRunner()
+
+    def fail() -> None:
+        raise KeyError("unexpected worker failure")
+
+    results, errors = _run_until_callback(
+        lambda success, failure: runner.submit(fail, success, failure)
+    )
+
+    assert results == []
+    assert len(errors) == 1
+    assert isinstance(errors[0], KeyError)
+
+
 def test_model_runtime_initializes_on_ui_thread_after_tray_is_visible() -> None:
     events: list[str] = []
 

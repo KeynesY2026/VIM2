@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ctypes
+import logging
+import os
 import sys
 from collections.abc import Callable
 
@@ -24,6 +26,9 @@ from vim2.state import AppState, StateMachine
 from vim2.ui import DesktopView
 
 
+RESTART_EXIT_CODE = 75
+
+
 class _WorkerSignals(QObject):
     succeeded = Signal(object)
     failed = Signal(object)
@@ -40,7 +45,8 @@ class _Worker(QRunnable):
     def run(self) -> None:
         try:
             result = self.work()
-        except (OSError, RuntimeError, ValueError, MemoryError) as exc:
+        except Exception as exc:
+            logging.getLogger(__name__).exception("Background task failed")
             self.signals.failed.emit(exc)
         else:
             self.signals.succeeded.emit(result)
@@ -86,6 +92,20 @@ def _foreground_window() -> int:
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     user32.GetForegroundWindow.restype = ctypes.c_void_p
     return int(user32.GetForegroundWindow() or 0)
+
+
+def _restart_process(paths: AppPaths) -> None:
+    os.execv(
+        sys.executable,
+        [
+            sys.executable,
+            "-m",
+            "vim2",
+            "--root",
+            str(paths.root),
+            "--windowed",
+        ],
+    )
 
 
 def _prepare_desktop_runtime(
@@ -152,6 +172,7 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
         view=view,
         task_runner=runner,
         foreground_window=_foreground_window,
+        restart_application=lambda: app.exit(RESTART_EXIT_CODE),
     )
     bridge.toggle_requested.connect(controller.toggle_recording)
     bridge.cancel_requested.connect(controller.cancel)
@@ -183,4 +204,9 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
     _prepare_desktop_runtime(app, view, recognizer, controller)
     exit_code = app.exec()
     cleanup()
+    if exit_code == RESTART_EXIT_CODE:
+        logging.getLogger(__name__).info(
+            "Restarting to isolate model backend"
+        )
+        _restart_process(paths)
     return exit_code

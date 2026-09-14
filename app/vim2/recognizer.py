@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import logging
 import os
 import threading
 from pathlib import Path
@@ -9,6 +10,9 @@ from typing import Any
 from vim2.audio import AudioArtifact
 from vim2.models import MODEL_SPECS, ModelBackend, ModelId, ModelSpec
 from vim2.paths import AppPaths
+
+
+logger = logging.getLogger(__name__)
 
 
 class ModelSwitchError(RuntimeError):
@@ -71,12 +75,14 @@ class QwenRecognizer:
                     "Unload the resident model before loading another model"
                 )
             spec = MODEL_SPECS[model_id]
+            logger.info("Loading model %s via %s", model_id, spec.backend)
             self.initialize_runtime(model_id)
             if spec.backend is ModelBackend.SHERPA_ONNX_CPU:
                 self._load_sherpa_model(spec)
             else:
                 self._load_qwen_model(spec)
             self._loaded_model = model_id
+            logger.info("Model loaded: %s", model_id)
 
     def _load_qwen_model(self, spec: ModelSpec) -> None:
         if not self._torch.cuda.is_available():
@@ -138,6 +144,7 @@ class QwenRecognizer:
             if self._model is None:
                 return
             loaded_model = self._loaded_model
+            logger.info("Unloading model %s", loaded_model)
             self._model = None
             self._loaded_model = None
             gc.collect()
@@ -189,6 +196,7 @@ class QwenRecognizer:
         cancel_event: threading.Event | None = None,
     ) -> str:
         with self._lock:
+            logger.info("Transcription started with model %s", model_id)
             if cancel_event is not None and cancel_event.is_set():
                 raise TranscriptionCancelled()
             if self._model is None or self._loaded_model is not model_id:
@@ -239,6 +247,7 @@ class QwenRecognizer:
             text = results[0].text
             if not isinstance(text, str):
                 raise RuntimeError("Qwen3-ASR returned an invalid text result")
+            logger.info("Transcription completed with model %s", model_id)
             return text
 
     def _transcribe_sherpa(

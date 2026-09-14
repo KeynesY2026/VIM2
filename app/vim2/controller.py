@@ -5,7 +5,7 @@ import threading
 from typing import Callable, Protocol
 
 from vim2.config import Settings
-from vim2.models import ModelId
+from vim2.models import MODEL_SPECS, ModelId
 from vim2.recognizer import TranscriptionCancelled
 from vim2.session import FinalRecognitionError, VoiceSession
 from vim2.state import AppState, StateMachine
@@ -67,6 +67,7 @@ class AppController:
         view: ControllerView,
         task_runner: TaskRunner,
         foreground_window: Callable[[], int],
+        restart_application: Callable[[], None] = lambda: None,
     ) -> None:
         self._machine = machine
         self._settings = settings
@@ -76,6 +77,7 @@ class AppController:
         self._view = view
         self._runner = task_runner
         self._foreground_window = foreground_window
+        self._restart_application = restart_application
         self._preview_busy = False
         self._preview_pending = False
         self._preview_cancel_event: threading.Event | None = None
@@ -275,6 +277,16 @@ class AppController:
             or model_id is self.selected_model
             or self._operation_busy
         ):
+            return
+        if (
+            MODEL_SPECS[model_id].backend
+            is not MODEL_SPECS[self.selected_model].backend
+        ):
+            self._settings = replace(
+                self._settings, selected_model=model_id
+            )
+            self._settings_repository.save(self._settings)
+            self._restart_application()
             return
         self._machine.transition_to(AppState.MODEL_SWITCHING)
         self._view.render_state(AppState.MODEL_SWITCHING, model_id)

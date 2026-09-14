@@ -182,6 +182,36 @@ def _controller(tmp_path: Path, responses: list[str | Exception]):
     return controller, recognizer, recorder, paster, view, repository
 
 
+def test_cross_backend_model_switch_restarts_without_loading_both_runtimes(
+    tmp_path: Path,
+) -> None:
+    machine = StateMachine()
+    recognizer = FakeLifecycleRecognizer()
+    recorder = FakeRecorder(tmp_path)
+    paster = FakePaster()
+    view = FakeView()
+    repository = FakeSettingsRepository()
+    restart_calls: list[bool] = []
+    controller = AppController(
+        machine=machine,
+        settings=Settings(selected_model=ModelId.CPU),
+        settings_repository=repository,
+        recognizer=recognizer,
+        session=VoiceSession(machine, recorder, recognizer, paster),
+        view=view,
+        task_runner=ImmediateRunner(),
+        foreground_window=lambda: 321,
+        restart_application=lambda: restart_calls.append(True),
+    )
+    controller.start()
+
+    controller.switch_model(ModelId.FAST)
+
+    assert recognizer.switched == []
+    assert repository.saved[-1].selected_model is ModelId.FAST
+    assert restart_calls == [True]
+
+
 def test_startup_loads_selected_model_before_enabling_recording(
     tmp_path: Path,
 ) -> None:
