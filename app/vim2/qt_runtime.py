@@ -21,6 +21,7 @@ from vim2.hotkey import (
     WindowsHotkeyListener,
     parse_hotkey,
 )
+from vim2.hotwords import HotwordRepository
 from vim2.paths import AppPaths
 from vim2.recognizer import QwenRecognizer
 from vim2.session import VoiceSession
@@ -98,6 +99,10 @@ def _foreground_window() -> int:
 
 def _open_local_file(path: Path) -> bool:
     return QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+
+def _open_hotwords_file(path: Path) -> bool:
+    return _open_local_file(HotwordRepository(path).ensure_file())
 
 
 def _restart_process(paths: AppPaths) -> None:
@@ -179,7 +184,7 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
         task_runner=runner,
         foreground_window=_foreground_window,
         restart_application=lambda: app.exit(RESTART_EXIT_CODE),
-        open_hotwords_file=lambda: _open_local_file(paths.hotwords_file),
+        open_hotwords_file=lambda: _open_hotwords_file(paths.hotwords_file),
     )
     bridge.toggle_requested.connect(controller.toggle_recording)
     bridge.cancel_requested.connect(controller.cancel)

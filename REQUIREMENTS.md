@@ -176,7 +176,7 @@ VIM2 是 VIM 第一版的后续版本。产品继续提供 Windows 全局语音�
 
 ### 3.8 热词与上下文偏置
 
-- 热词文件位于 Portable 目录的 `config/hotwords.txt`，使用 UTF-8 编码，一行一个热词或短语。
+- 热词文件位于 Portable 目录的 `config/hotwords.txt`，使用 UTF-8 编码，一行一个热词或短语；文件缺失时自动生成带说明注释的空模板。
 - 解析接受 BOM，去除首尾空白，忽略空行和以 `#` 开头的注释行，并对完全相同的项目保序去重。
 - 最多加载 100 项，每项最多 100 个字符。项目不得包含 ASCII 逗号，避免破坏 CPU 后端的热词分隔格式。
 - GPU 后端把有效项目按换行拼接为 qwen-asr context；CPU 后端按 ASCII 逗号拼接为 sherpa-onnx hotwords。

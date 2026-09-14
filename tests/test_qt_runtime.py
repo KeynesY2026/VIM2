@@ -127,3 +127,23 @@ def test_open_local_file_uses_qt_file_url(
     assert result is True
     assert opened[0].isLocalFile()
     assert Path(opened[0].toLocalFile()) == path
+
+
+def test_open_hotwords_file_creates_missing_template(
+    tmp_path: Path, monkeypatch
+) -> None:
+    opened = []
+    monkeypatch.setattr(
+        qt_runtime.QDesktopServices,
+        "openUrl",
+        lambda url: opened.append(url) or True,
+    )
+    path = tmp_path / "config" / "hotwords.txt"
+
+    result = qt_runtime._open_hotwords_file(path)
+
+    assert result is True
+    assert path.read_text(encoding="utf-8") == (
+        "# One hotword or phrase per line. Lines beginning with # are ignored.\n"
+    )
+    assert Path(opened[0].toLocalFile()) == path

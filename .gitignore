@@ -6,3 +6,4 @@ __pycache__/
 temp/
 *benchmark-smoke*.json
 runtime/
+config/hotwords.txt

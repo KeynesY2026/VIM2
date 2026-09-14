@@ -55,8 +55,12 @@ class HotwordRepository:
     def __init__(self, path: Path) -> None:
         self.path = path
 
-    def load(self) -> HotwordSnapshot:
+    def ensure_file(self) -> Path:
         if not self.path.exists():
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(HOTWORDS_TEMPLATE, encoding="utf-8")
-        return parse_hotwords(self.path.read_text(encoding="utf-8-sig"))
+        return self.path
+
+    def load(self) -> HotwordSnapshot:
+        path = self.ensure_file()
+        return parse_hotwords(path.read_text(encoding="utf-8-sig"))
