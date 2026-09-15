@@ -125,13 +125,15 @@ class VoiceOverlay(QWidget):
     _MAXIMUM_WIDTH = 560
 
     def __init__(self) -> None:
-        super().__init__(
-            None,
+        window_flags = (
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.NoDropShadowWindowHint,
+            | Qt.WindowType.NoDropShadowWindowHint
         )
+        if not hasattr(ctypes, "WinDLL"):
+            window_flags |= Qt.WindowType.WindowDoesNotAcceptFocus
+        super().__init__(None, window_flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -179,7 +181,7 @@ class VoiceOverlay(QWidget):
         self._fade.finished.connect(self._park_if_transparent)
         self._opacity.setOpacity(0.0)
         self._fade_target_visible = False
-        self._target_window: int | None = None
+        self._target_window: object | None = None
         self.move(-9999, 0)
         self.show()
 
@@ -213,13 +215,16 @@ class VoiceOverlay(QWidget):
     def _tail(text: str, limit: int = 72) -> str:
         return text if len(text) <= limit else f"…{text[-limit:]}"
 
-    def show_for_window(self, target_window: int | None = None) -> None:
+    def show_for_window(self, target_window: object | None = None) -> None:
         self._target_window = target_window
         self._move_on_screen()
         self._fade.stop()
         self._fade_target_visible = True
         self._fade.setStartValue(self._opacity.opacity())
         self._fade.setEndValue(1.0)
+        if not hasattr(ctypes, "WinDLL"):
+            self.show()
+            self.raise_()
         self._ensure_topmost()
         self._fade.start()
 
@@ -312,7 +317,7 @@ class VoiceOverlay(QWidget):
             0x0002 | 0x0001 | 0x0010 | 0x0040,
         )
 
-    def _screen_for_window(self, target_window: int | None):
+    def _screen_for_window(self, target_window: object | None):
         app = QApplication.instance()
         if target_window and hasattr(ctypes, "WinDLL"):
             rect = wintypes_rect()
@@ -347,7 +352,13 @@ def wintypes_rect() -> _Rect:
 
 
 class DesktopView:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        supported_models: tuple[ModelId, ...] | None = None,
+    ) -> None:
+        self._supported_models = frozenset(
+            tuple(ModelId) if supported_models is None else supported_models
+        )
         self.overlay = VoiceOverlay()
         self.tray = QSystemTrayIcon()
         self.menu = QMenu()
@@ -364,12 +375,14 @@ class DesktopView:
         self.accurate_model_action = QAction(
             "高精度：Qwen3-ASR 1.7B INT8", self.model_menu
         )
-        for action in (
-            self.cpu_model_action,
-            self.fast_model_action,
-            self.accurate_model_action,
-        ):
+        self._model_actions = {
+            ModelId.CPU: self.cpu_model_action,
+            ModelId.FAST: self.fast_model_action,
+            ModelId.ACCURATE: self.accurate_model_action,
+        }
+        for model_id, action in self._model_actions.items():
             action.setCheckable(True)
+            action.setVisible(model_id in self._supported_models)
         self.about_action = QAction("关于")
         self.exit_action = QAction("退出")
 
@@ -388,7 +401,7 @@ class DesktopView:
         self.tray.setToolTip(STATUS_TOOLTIPS[AppState.STARTING])
 
         self._controller = None
-        self._target_window: int | None = None
+        self._target_window: object | None = None
         self._latest_preview = ""
         self._preview_timer = QTimer()
         self._preview_timer.setInterval(1_000)
@@ -432,12 +445,11 @@ class DesktopView:
         )
         self.recording_action.setText(self._record_action_label(state))
         self.model_menu.setEnabled(capabilities.can_switch_model)
-        for action in (
-            self.cpu_model_action,
-            self.fast_model_action,
-            self.accurate_model_action,
-        ):
-            action.setEnabled(capabilities.can_switch_model)
+        for action_model_id, action in self._model_actions.items():
+            action.setEnabled(
+                capabilities.can_switch_model
+                and action_model_id in self._supported_models
+            )
         self.cpu_model_action.setChecked(model_id is ModelId.CPU)
         self.fast_model_action.setChecked(model_id is ModelId.FAST)
         self.accurate_model_action.setChecked(model_id is ModelId.ACCURATE)
@@ -461,7 +473,7 @@ class DesktopView:
     def start_recording_timers(
         self,
         max_seconds: int,
-        target_window: int,
+        target_window: object,
         preview_interval_ms: int,
     ) -> None:
         self._target_window = target_window

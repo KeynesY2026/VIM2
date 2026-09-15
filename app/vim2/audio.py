@@ -48,9 +48,7 @@ class AudioRecorder:
         self._chunks = []
         self._status_errors = []
         self._accepting_audio = True
-        portaudio_error = getattr(
-            self._sounddevice, "PortAudioError", RuntimeError
-        )
+        stream = None
         try:
             stream = self._sounddevice.InputStream(
                 device=None,
@@ -62,10 +60,18 @@ class AudioRecorder:
                 callback=self._on_audio,
             )
             stream.start()
-        except (OSError, RuntimeError, portaudio_error) as exc:
+        except Exception as exc:
             self._accepting_audio = False
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception as close_exc:
+                    raise RuntimeError(
+                        "Cannot open the current default microphone and cannot "
+                        f"close its partial stream: {close_exc}"
+                    ) from exc
             raise RuntimeError(
-                f"Cannot open the current Windows default microphone: {exc}"
+                f"Cannot open the current default microphone: {exc}"
             ) from exc
         self._stream = stream
 

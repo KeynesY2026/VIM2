@@ -15,12 +15,45 @@ Qwen3-ASR 模型在 NVIDIA GPU 或 CPU 上离线识别，并通过系统剪贴�
 
 正常启动不联网、不安装依赖，也不使用用户目录中的 Hugging Face 缓存。
 
+### macOS Apple Silicon CPU Phase 1
+
+macOS 当前仅提供有界的 CPU MVP：原生 arm64 Python 3.11、
+`qwen3-asr-0.6b-int8-cpu` 和现有 sherpa-onnx 0.6B INT8 模型。不会静默改用
+CUDA、BitsAndBytes 或 MPS；配置为快速/高精度模型时，平台预检会直接拒绝。
+Windows 仍使用原 `requirements.lock`、启动脚本和全部三个模型；macOS 依赖单独
+列于 `requirements-macos-cpu.lock`。
+
+启用前将 `config/settings.json` 的 `selected_model` 设为
+`qwen3-asr-0.6b-int8-cpu`，并把完整模型放在：
+
+```text
+.models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/
+```
+
+然后从可写的源码目录用原生 Python 3.11 检查并启动：
+
+```bash
+PYTHONPATH=app python3.11 -m vim2 --root "$PWD" --check
+PYTHONPATH=app python3.11 -m vim2 --root "$PWD"
+```
+
+启动预检会明确报告 Rosetta、Python 版本、模型文件、PySide6/sounddevice/
+sherpa-onnx/PyObjC 原生模块，以及已拒绝的辅助功能、输入监控或麦克风权限。
+应在“系统设置 → 隐私与安全性”中把权限授予稳定的 Python 启动器；麦克风首次
+访问仍可能由 macOS 弹出授权请求。
+
+本阶段尚未在真实 M1 上验证模型加载/识别速度与准确率、16 kHz 音频设备行为、
+完整 TCC 授权流程、事件注入兼容性、arm64 wheel 安装，也未完成 `.app` 签名、
+公证或发布布局。因此不能把本节视为正式 macOS 发布支持声明。
+
 ## 启动
 
 双击 `Start.cmd`。它通过隐藏的 Windows PowerShell 启动 `pythonw.exe`，
 桌面不会保留命令行窗口。`start.bat` 保留为诊断入口，可显示启动错误和
-执行 `start.bat --check`。首次运行默认加载 Qwen3-ASR 0.6B FP16。
-默认全局热键是右 Alt；再次按下停止录音，录音期间按 Esc 取消。
+执行 `start.bat --check`。仓库当前检入的 `config/settings.json` 选择
+Qwen3-ASR 0.6B INT8 CPU；Windows 删除配置或省略 `selected_model` 时仍沿用
+原有 Qwen3-ASR 0.6B FP16 缺省回退，不改变 Windows 原行为。默认全局热键是
+右 Alt；再次按下停止录音，录音期间按 Esc 取消。
 实时识别默认每秒发起一次预览，间隔可在 `config/settings.json` 中通过
 `preview_interval_ms` 调整为 250–1000 毫秒；前一次推理未完成时只保留一个
 最新待处理请求，完成后立即识别最新音频，不处理已经过期的中间快照。
@@ -41,20 +74,25 @@ Qwen3-ASR 模型在 NVIDIA GPU 或 CPU 上离线识别，并通过系统剪贴�
 - `config/settings.json`：模型、最长录音时长、实时预览间隔和尾段重叠秒数。
 - `config/hotkey.conf`：单键或以 `+` 分隔的组合键。
 
-当前默认配置：
+当前检入配置（不是字段缺失时的 Windows 缺省回退值）：
 
 ```json
 {
   "max_recording_seconds": 90,
   "preview_interval_ms": 1000,
-  "selected_model": "qwen3-asr-0.6b-fp16",
+  "selected_model": "qwen3-asr-0.6b-int8-cpu",
   "tail_overlap_seconds": 5
 }
 ```
 
-`selected_model` 也可设为 `qwen3-asr-0.6b-int8-cpu`（CPU）或
-`qwen3-asr-1.7b-int8`（高精度）。默认仍为 0.6B FP16；1.7B 不参与默认
-实时链路。
+`selected_model` 的三个有效值为：
+
+- `qwen3-asr-0.6b-int8-cpu`（CPU）
+- `qwen3-asr-0.6b-fp16`（FAST/快速）
+- `qwen3-asr-1.7b-int8`（ACCURATE/高精度）
+
+Windows 三者均可选择，且字段缺失时仍以 FAST/0.6B FP16 作为原有缺省值；
+macOS Phase 1 仅允许 CPU，配置 FAST 或 ACCURATE 会在预检中明确失败。
 
 CPU 模式使用
 `.models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25` 中的预量化 ONNX
@@ -122,8 +160,8 @@ RTF 和峰值显存，并执行 `REQUIREMENTS.md` 中的门槛检查。
 三次并取中位数。CPU INT8 无需 GPU 且冷加载最快，但该机器上的推理速度约为
 0.6B FP16 的 52%；它应作为无 CUDA 回退模式，而不是速度优先模式。
 1.7B 对真实尾段的历史耗时为：4 秒音频 4.22 秒、8 秒音频 6.77 秒、12 秒
-音频 9.82 秒。因此
-0.6B FP16 是默认主模型；1.7B 保留为用户可选的高精度模式。
+音频 9.82 秒。因此 0.6B FP16 仍是 Windows 字段缺失时的缺省主模型；仓库
+当前检入配置选择 CPU，1.7B 保留为 Windows 用户可选的高精度模式。
 
 ## 开发验证
 

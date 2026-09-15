@@ -29,7 +29,7 @@ class ControllerView(Protocol):
     def start_recording_timers(
         self,
         max_seconds: int,
-        target_window: int,
+        target_window: object,
         preview_interval_ms: int,
     ) -> None: ...
 
@@ -66,7 +66,7 @@ class AppController:
         session: VoiceSession,
         view: ControllerView,
         task_runner: TaskRunner,
-        foreground_window: Callable[[], int],
+        foreground_window: Callable[[], object],
         restart_application: Callable[[], None] = lambda: None,
     ) -> None:
         self._machine = machine

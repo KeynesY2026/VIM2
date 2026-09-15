@@ -1,4 +1,8 @@
+import ctypes
 import os
+from unittest.mock import Mock
+
+import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -67,6 +71,39 @@ def test_overlay_is_non_activating_click_through_compact_capsule() -> None:
     assert overlay.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
     assert overlay.windowFlags() & Qt.WindowType.NoDropShadowWindowHint
     assert not overlay.windowFlags() & Qt.WindowType.WindowMinMaxButtonsHint
+
+
+@pytest.mark.skipif(
+    hasattr(ctypes, "WinDLL"),
+    reason="the non-activating re-raise path is specific to non-Win32 hosts",
+)
+def test_show_for_window_reshows_and_raises_non_win32_overlay_without_focus() -> None:
+    app = _app()
+    overlay = VoiceOverlay()
+    overlay.hide()
+    app.processEvents()
+    show = Mock(wraps=overlay.show)
+    raise_window = Mock(wraps=overlay.raise_)
+    activate = Mock(wraps=overlay.activateWindow)
+    overlay.show = show
+    overlay.raise_ = raise_window
+    overlay.activateWindow = activate
+
+    overlay.show_for_window()
+    app.processEvents()
+
+    show.assert_called_once_with()
+    raise_window.assert_called_once_with()
+    activate.assert_not_called()
+    assert overlay.isVisible()
+    assert overlay.windowFlags() & Qt.WindowType.Tool
+    assert overlay.windowFlags() & Qt.WindowType.FramelessWindowHint
+    assert overlay.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert overlay.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
+    assert overlay.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    assert overlay.testAttribute(
+        Qt.WidgetAttribute.WA_TransparentForMouseEvents
+    )
 
 
 def test_overlay_paints_v1_translucent_background() -> None:

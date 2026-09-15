@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 import logging
 import os
 import sys
@@ -9,17 +8,12 @@ from collections.abc import Callable
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
-from vim2.application import SingleInstanceGuard
 from vim2.audio import AudioRecorder
-from vim2.clipboard import WindowsClipboardPaster
 from vim2.config import Settings, SettingsRepository
 from vim2.controller import AppController
-from vim2.hotkey import (
-    HotkeyDispatcher,
-    WindowsHotkeyListener,
-    parse_hotkey,
-)
+from vim2.hotkey import HotkeyDispatcher, parse_hotkey
 from vim2.paths import AppPaths
+from vim2.platform_services import PlatformServices, create_platform_services
 from vim2.recognizer import QwenRecognizer
 from vim2.session import VoiceSession
 from vim2.state import AppState, StateMachine
@@ -83,17 +77,6 @@ class _HotkeyBridge(QObject):
     cancel_requested = Signal()
 
 
-def _enable_per_monitor_dpi() -> None:
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
-
-
-def _foreground_window() -> int:
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    user32.GetForegroundWindow.restype = ctypes.c_void_p
-    return int(user32.GetForegroundWindow() or 0)
-
-
 def _restart_process(paths: AppPaths) -> None:
     os.execv(
         sys.executable,
@@ -120,13 +103,19 @@ def _prepare_desktop_runtime(
     controller.start()
 
 
-def run_qt_application(paths: AppPaths, settings: Settings) -> int:
-    _enable_per_monitor_dpi()
+def run_qt_application(
+    paths: AppPaths,
+    settings: Settings,
+    *,
+    platform_services: PlatformServices | None = None,
+) -> int:
+    services = platform_services or create_platform_services(paths)
+    services.enable_desktop_features()
     app = QApplication(sys.argv)
     app.setApplicationName("VIM2")
     app.setQuitOnLastWindowClosed(False)
 
-    guard = SingleInstanceGuard()
+    guard = services.create_single_instance_guard()
     if not guard.acquire():
         QMessageBox.information(None, "VIM2", "VIM2 已经在运行。")
         return 0
@@ -150,10 +139,8 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
             AppState.RETRY_PENDING,
         },
     )
-    hotkey = WindowsHotkeyListener(dispatcher)
-    paster = WindowsClipboardPaster(
-        wait_until_hotkey_released=hotkey.wait_until_released
-    )
+    hotkey = services.create_hotkey_listener(dispatcher)
+    paster = services.create_clipboard_paster(hotkey)
     session = VoiceSession(
         machine,
         recorder,
@@ -161,7 +148,7 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
         paster,
         tail_overlap_seconds=settings.tail_overlap_seconds,
     )
-    view = DesktopView()
+    view = DesktopView(supported_models=services.supported_models)
     runner = QtTaskRunner()
     controller = AppController(
         machine=machine,
@@ -171,7 +158,7 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
         session=session,
         view=view,
         task_runner=runner,
-        foreground_window=_foreground_window,
+        foreground_window=services.capture_target,
         restart_application=lambda: app.exit(RESTART_EXIT_CODE),
     )
     bridge.toggle_requested.connect(controller.toggle_recording)
@@ -180,7 +167,7 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
 
     try:
         hotkey.start()
-    except (OSError, RuntimeError) as exc:
+    except (ImportError, OSError, RuntimeError) as exc:
         QMessageBox.critical(
             None, "VIM2", f"无法注册全局热键 {settings.hotkey}：{exc}"
         )
