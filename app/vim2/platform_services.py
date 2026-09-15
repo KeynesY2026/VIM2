@@ -5,6 +5,7 @@ import sys
 from dataclasses import dataclass
 from typing import Protocol
 
+from vim2.config import MacPasteShortcutSelection
 from vim2.models import ModelId
 from vim2.paths import AppPaths
 
@@ -55,7 +56,10 @@ class PlatformServices(Protocol):
     ) -> GlobalHotkeyService: ...
 
     def create_clipboard_paster(
-        self, hotkey: GlobalHotkeyService
+        self,
+        hotkey: GlobalHotkeyService,
+        *,
+        paste_shortcut_selection: MacPasteShortcutSelection | None = None,
     ) -> TextPaster: ...
 
 

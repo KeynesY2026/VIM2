@@ -21,7 +21,13 @@ macOS 当前仅提供有界的 CPU MVP：原生 arm64 Python 3.11、
 `qwen3-asr-0.6b-int8-cpu` 和现有 sherpa-onnx 0.6B INT8 模型。不会静默改用
 CUDA、BitsAndBytes 或 MPS；配置为快速/高精度模型时，平台预检会直接拒绝。
 Windows 仍使用原 `requirements.lock`、启动脚本和全部三个模型；macOS 依赖单独
-列于 `requirements-macos-cpu.lock`。
+列于 `requirements-macos-cpu.lock`。macOS 托盘中的“粘贴快捷键”子菜单默认选择
+“macOS：⌘V”；向本机 Mac 应用粘贴时使用 ⌘V，向 Windows 或远程桌面粘贴时可改选
+“Windows / 远程桌面：Ctrl+V”。选择会先以单文件原子替换写入
+`settings.json`，成功后立即用于后续粘贴，下次启动恢复；写入失败时配置、运行时和
+菜单选择均保持旧值，且不会重写 `hotkey.conf`。只有“就绪”状态可切换；录音、
+实时/最终识别、等待重试和模型切换期间菜单禁用。
+Windows 本机始终使用 Ctrl+V，不显示此菜单，也不受该 macOS 配置影响。
 
 启用前将 `config/settings.json` 的 `selected_model` 设为
 `qwen3-asr-0.6b-int8-cpu`，并把完整模型放在：
@@ -71,13 +77,15 @@ Qwen3-ASR 0.6B INT8 CPU；Windows 删除配置或省略 `selected_model` 时仍�
 
 配置位于：
 
-- `config/settings.json`：模型、最长录音时长、实时预览间隔和尾段重叠秒数。
+- `config/settings.json`：模型、最长录音时长、实时预览间隔、尾段重叠秒数，以及
+  macOS 粘贴快捷键。
 - `config/hotkey.conf`：单键或以 `+` 分隔的组合键。
 
 当前检入配置（不是字段缺失时的 Windows 缺省回退值）：
 
 ```json
 {
+  "macos_paste_shortcut": "command-v",
   "max_recording_seconds": 90,
   "preview_interval_ms": 1000,
   "selected_model": "qwen3-asr-0.6b-int8-cpu",
@@ -93,6 +101,9 @@ Qwen3-ASR 0.6B INT8 CPU；Windows 删除配置或省略 `selected_model` 时仍�
 
 Windows 三者均可选择，且字段缺失时仍以 FAST/0.6B FP16 作为原有缺省值；
 macOS Phase 1 仅允许 CPU，配置 FAST 或 ACCURATE 会在预检中明确失败。
+`macos_paste_shortcut` 的有效值为 `command-v`（缺失时默认，本机 Mac）和
+`control-v`（Windows / 远程桌面）；其他值会在启动时作为无效配置明确拒绝。
+该字段不改变 Windows 本机固定的 Ctrl+V 粘贴行为。
 
 CPU 模式使用
 `.models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25` 中的预量化 ONNX

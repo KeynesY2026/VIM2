@@ -11,6 +11,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
+from vim2.config import MacPasteShortcut
 from vim2.models import ModelId
 from vim2.state import AppState
 from vim2.ui import (
@@ -46,8 +47,10 @@ def test_status_tooltips_keep_v1_semantics() -> None:
     assert STATUS_TOOLTIPS[AppState.FINALIZING] == "VIM2 - Processing"
 
 
-def test_only_ready_state_allows_model_switching() -> None:
-    assert UiCapabilities.for_state(AppState.READY).can_switch_model
+def test_only_ready_state_allows_model_and_paste_shortcut_switching() -> None:
+    ready = UiCapabilities.for_state(AppState.READY)
+    assert ready.can_switch_model
+    assert ready.can_switch_paste_shortcut
     for state in (
         AppState.MODEL_LOADING,
         AppState.RECORDING,
@@ -56,7 +59,9 @@ def test_only_ready_state_allows_model_switching() -> None:
         AppState.RETRY_PENDING,
         AppState.MODEL_SWITCHING,
     ):
-        assert not UiCapabilities.for_state(state).can_switch_model
+        capabilities = UiCapabilities.for_state(state)
+        assert not capabilities.can_switch_model
+        assert not capabilities.can_switch_paste_shortcut
 
 
 def test_overlay_is_non_activating_click_through_compact_capsule() -> None:
@@ -227,6 +232,64 @@ def test_tray_menu_reflects_state_and_selected_model() -> None:
     assert view.recording_action.text() == "识别中…"
     assert not view.recording_action.isEnabled()
     assert not view.fast_model_action.isEnabled()
+
+
+def test_macos_tray_menu_shows_exclusive_paste_shortcuts_and_current_value() -> None:
+    _app()
+    view = DesktopView(
+        macos_paste_shortcut=MacPasteShortcut.COMMAND_V,
+    )
+    controller = Mock()
+    view.bind(controller, lambda: None)
+    view.render_state(AppState.READY, model_id=ModelId.CPU)
+
+    assert view.paste_shortcut_menu is not None
+    assert view.paste_shortcut_menu.title() == "粘贴快捷键"
+    assert view.command_v_action is not None
+    assert view.control_v_action is not None
+    assert view.command_v_action.text() == "macOS：⌘V"
+    assert view.control_v_action.text() == "Windows / 远程桌面：Ctrl+V"
+    assert view.command_v_action.isChecked()
+    assert not view.control_v_action.isChecked()
+    assert view.paste_shortcut_action_group is not None
+    assert view.paste_shortcut_action_group.isExclusive()
+
+    view.control_v_action.trigger()
+
+    controller.switch_macos_paste_shortcut.assert_called_once_with(
+        MacPasteShortcut.CONTROL_V
+    )
+    assert not view.command_v_action.isChecked()
+    assert view.control_v_action.isChecked()
+
+    view.render_macos_paste_shortcut(MacPasteShortcut.COMMAND_V)
+
+    assert view.command_v_action.isChecked()
+    assert not view.control_v_action.isChecked()
+
+
+def test_macos_paste_shortcut_menu_is_enabled_only_while_ready() -> None:
+    _app()
+    view = DesktopView(
+        macos_paste_shortcut=MacPasteShortcut.COMMAND_V,
+    )
+
+    for state in AppState:
+        view.render_state(state, model_id=ModelId.CPU)
+        assert view.paste_shortcut_menu is not None
+        assert view.paste_shortcut_menu.isEnabled() is (
+            state is AppState.READY
+        )
+
+
+def test_windows_tray_menu_does_not_show_macos_paste_shortcuts() -> None:
+    _app()
+    view = DesktopView()
+
+    assert view.paste_shortcut_menu is None
+    assert view.command_v_action is None
+    assert view.control_v_action is None
+    assert "粘贴快捷键" not in [action.text() for action in view.menu.actions()]
 
 
 def test_tray_menu_supports_cpu_model() -> None:

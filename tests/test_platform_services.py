@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from vim2.clipboard import ClipboardPasteError
+from vim2.config import MacPasteShortcut, MacPasteShortcutSelection
 from vim2.hotkey import HotkeyDispatcher, KeyEvent, parse_hotkey
 from vim2.models import ModelId
 from vim2.paths import AppPaths
@@ -214,18 +215,27 @@ class _FakePasteNative:
         self.calls.append(("command-v", None))
         return True
 
+    def send_control_v(self) -> bool:
+        self.calls.append(("control-v", None))
+        return True
+
 
 class MacClipboardSafetyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.target = MacTargetContext(42, "com.example.Editor")
         self.other = MacTargetContext(77, "com.example.Other")
 
-    def _paster(self, native: _FakePasteNative) -> MacClipboardPaster:
+    def _paster(
+        self,
+        native: _FakePasteNative,
+        selection: MacPasteShortcutSelection | None = None,
+    ) -> MacClipboardPaster:
         return MacClipboardPaster(
             native,
             wait_until_hotkey_released=lambda: native.calls.append(
                 ("released", None)
             ),
+            paste_shortcut_selection=selection,
         )
 
     def test_paste_rechecks_pid_and_bundle_before_command_v(self) -> None:
@@ -244,6 +254,22 @@ class MacClipboardSafetyTests(unittest.TestCase):
                 ("command-v", None),
             ],
         )
+
+    def test_each_paste_reads_the_shared_shortcut_selection(self) -> None:
+        native = _FakePasteNative(self.target)
+        selection = MacPasteShortcutSelection(MacPasteShortcut.COMMAND_V)
+        paster = self._paster(native, selection)
+
+        paster.paste("local text", self.target)
+        selection.shortcut = MacPasteShortcut.CONTROL_V
+        paster.paste("remote text", self.target)
+
+        self.assertEqual(paster.paste_shortcut, MacPasteShortcut.CONTROL_V)
+        self.assertEqual(
+            [call for call in native.calls if call[0].endswith("-v")],
+            [("command-v", None), ("control-v", None)],
+        )
+        self.assertFalse(hasattr(paster, "set_paste_shortcut"))
 
     def test_pid_reuse_fails_without_injecting_keys(self) -> None:
         native = _FakePasteNative(self.target)
@@ -306,6 +332,7 @@ class _PostingQuartz:
     kCGEventSourceUserData = 88
     kCGHIDEventTap = 99
     kCGEventFlagMaskCommand = 1 << 20
+    kCGEventFlagMaskControl = 1 << 18
 
     def __init__(self, fail_on: tuple[int, bool] | None = None) -> None:
         self.fail_on = fail_on
@@ -481,6 +508,26 @@ class MacNativeApiTests(unittest.TestCase):
                 0x56494D32,
             )
 
+    def test_control_v_events_carry_chord_flags_marker_and_order(self) -> None:
+        quartz = _PostingQuartz()
+        api = _native_api(_native_modules(quartz=quartz))
+
+        self.assertTrue(api.send_control_v())
+        self.assertEqual(
+            [(event.keycode, event.is_down) for event in quartz.posted],
+            [(59, True), (9, True), (9, False), (59, False)],
+        )
+        control_down, v_down, v_up, control_up = quartz.posted
+        self.assertEqual(control_down.flags, quartz.kCGEventFlagMaskControl)
+        self.assertEqual(v_down.flags, quartz.kCGEventFlagMaskControl)
+        self.assertEqual(v_up.flags, quartz.kCGEventFlagMaskControl)
+        self.assertEqual(control_up.flags, 0)
+        for event in quartz.posted:
+            self.assertEqual(
+                event.fields[quartz.kCGEventSourceUserData],
+                0x56494D32,
+            )
+
     def test_partial_command_v_failure_always_posts_key_up_cleanup(self) -> None:
         quartz = _PostingQuartz(fail_on=(9, True))
         api = _native_api(_native_modules(quartz=quartz))
@@ -493,6 +540,26 @@ class MacNativeApiTests(unittest.TestCase):
         self.assertEqual(
             quartz.posted[2].flags,
             quartz.kCGEventFlagMaskCommand,
+        )
+        self.assertEqual(quartz.posted[-1].flags, 0)
+        for event in quartz.posted:
+            self.assertEqual(
+                event.fields[quartz.kCGEventSourceUserData],
+                0x56494D32,
+            )
+
+    def test_partial_control_v_failure_always_posts_key_up_cleanup(self) -> None:
+        quartz = _PostingQuartz(fail_on=(9, True))
+        api = _native_api(_native_modules(quartz=quartz))
+
+        self.assertFalse(api.send_control_v())
+        self.assertEqual(
+            [(event.keycode, event.is_down) for event in quartz.posted],
+            [(59, True), (9, True), (9, False), (59, False)],
+        )
+        self.assertEqual(
+            quartz.posted[2].flags,
+            quartz.kCGEventFlagMaskControl,
         )
         self.assertEqual(quartz.posted[-1].flags, 0)
         for event in quartz.posted:

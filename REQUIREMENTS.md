@@ -46,8 +46,9 @@ arm64 Python 3.11 和既有 `qwen3-asr-0.6b-int8-cpu` / sherpa-onnx CPU
 macOS 启动必须明确检查 Rosetta、Python 版本、模型完整性、CPU 与 PyObjC
 原生依赖，并对辅助功能、输入监控和已拒绝/受限的麦克风权限给出可执行错误。
 全局热键映射右 Option 到既有 RightAlt 语义；最终文本使用 NSPasteboard、恢复
-目标应用并发送 Command+V。Windows 的 Win32 mutex、热键、剪贴板、Ctrl+V、
-三个模型和启动脚本行为不得改变。
+目标应用，并按 macOS 配置发送 Command+V（默认、本机 Mac）或 Control+V
+（Windows / 远程桌面）。Windows 的 Win32 mutex、热键、剪贴板、固定 Ctrl+V、
+三个模型和启动脚本行为不得改变，且不引入 Command 键语义。
 
 Phase 1 不声称已验证真实 M1 推理、TCC 全流程、应用兼容矩阵、签名、公证或
 正式 `.app` 发布；这些项目必须在 Apple Silicon 真机与稳定签名身份下验收。
@@ -86,6 +87,18 @@ Phase 1 不声称已验证真实 M1 推理、TCC 全流程、应用兼容矩阵�
 任意时刻只允许一个 ASR 模型驻留内存和显存。
 
 只有“就绪”状态允许切换模型。录音、实时识别、最终识别期间，以及存在等待重试的音频时，模型菜单必须禁用。重试必须继续使用失败时选中的模型；用户取消录音或放弃待重试音频后才能切换。
+
+### 2.4 macOS 粘贴快捷键切换
+
+1. macOS 用户从托盘“粘贴快捷键”子菜单选择“macOS：⌘V”或
+   “Windows / 远程桌面：Ctrl+V”。
+2. 两个选项互斥，当前生效项必须显示选中标记。
+3. 选择成功后立即用于后续粘贴，写入 Portable 配置并在下次启动恢复。
+4. 仅“就绪”状态允许切换；录音、实时识别、最终识别、等待重试、模型切换等
+   状态必须禁用菜单，避免会话中途改变。
+5. 持久化失败时必须显示错误，并继续使用和显示此前有效选择；运行时不使用可抛出
+   异常的回调更新或二次回滚。
+6. Windows 不显示此菜单，Windows 本机粘贴仍固定使用 Ctrl+V。
 
 ## 3. 功能需求
 
@@ -142,8 +155,12 @@ Phase 1 不声称已验证真实 M1 推理、TCC 全流程、应用兼容矩阵�
 ### 3.5 自动粘贴
 
 - 最终文本应粘贴到录音开始时处于前台的目标窗口。
-- 粘贴行为沿用 VIM 第一版的剪贴板与 SendInput 机制。
-- 程序将最终结果以 Unicode 文本写入系统剪贴板，恢复录音开始时记录的目标窗口，然后发送一次 Ctrl+V。
+- Windows 粘贴行为沿用 VIM 第一版的剪贴板与 SendInput 机制：程序将最终结果以
+  Unicode 文本写入系统剪贴板，恢复录音开始时记录的目标窗口，然后固定发送一次
+  Ctrl+V；macOS 选项不得改变 Windows 行为或为 Windows 引入 Command 键语义。
+- macOS 使用 NSPasteboard 并恢复、复核录音开始时的目标应用；本机 Mac 默认发送
+  Command+V，Windows / 远程桌面场景可发送 Control+V。两种事件序列都必须携带
+  VIM2 marker，并在部分注入失败时安全释放 V 键和修饰键。
 - 粘贴后不恢复用户原有剪贴板内容；最终识别文本保留在剪贴板中。
 - 兼容常规桌面应用和远程桌面场景。
 - 粘贴失败时显示明确错误，不得静默丢失识别结果。
@@ -159,6 +176,9 @@ Phase 1 不声称已验证真实 M1 推理、TCC 全流程、应用兼容矩阵�
   - Qwen3-ASR 0.6B INT8。
   - Qwen3-ASR 0.6B FP16。
   - Qwen3-ASR 1.7B INT8。
+- macOS 专用的“粘贴快捷键”子菜单。
+  - macOS：⌘V。
+  - Windows / 远程桌面：Ctrl+V。
 - 关于。
 - 退出。
 
@@ -288,8 +308,13 @@ VIM2/
 | `max_recording_seconds` | 整数 | `90` | 1–90 |
 | `preview_interval_ms` | 整数 | `1000` | 250–1000 |
 | `tail_overlap_seconds` | 整数 | `5` | 1–15 |
+| `macos_paste_shortcut` | 字符串 | `command-v` | `command-v`（本机 Mac 的 ⌘V）或 `control-v`（Windows / 远程桌面的 Ctrl+V）；仅影响 macOS |
 
 缺少可选字段时使用默认值；字段类型或范围无效时，启动检查必须报告明确错误。
+`macos_paste_shortcut` 缺失时兼容既有配置并使用 `command-v`；非法值必须拒绝，
+不得静默回退。选择变化必须只对 `settings.json` 做单文件原子替换，不得重写
+`hotkey.conf`；原子替换成功后才更新共享运行时选择和菜单，失败时磁盘、运行时与
+菜单均保持旧值。Windows 本机始终使用 Ctrl+V。
 当前检入的 `config/settings.json` 明确选择 `qwen3-asr-0.6b-int8-cpu`，因此不触发
 Windows 的字段缺失回退。
 
@@ -311,6 +336,9 @@ Windows 的字段缺失回退。
 │ 识别模型                     ▶  │
 │   ✓ 快速：Qwen3-ASR 0.6B FP16   │
 │     高精度：Qwen3-ASR 1.7B INT8 │
+│ 粘贴快捷键                   ▶  │  ← 仅 macOS
+│   ✓ macOS：⌘V                   │
+│     Windows / 远程桌面：Ctrl+V  │
 ├─────────────────────────────────┤
 │ 关于                            │
 │ 退出                            │

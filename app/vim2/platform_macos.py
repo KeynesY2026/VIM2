@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from vim2.clipboard import ClipboardPasteError
+from vim2.config import MacPasteShortcut, MacPasteShortcutSelection
 from vim2.hotkey import HotkeyDispatcher, KeyEvent, VIM2_INPUT_MARKER
 from vim2.paths import AppPaths
 from vim2.platform_services import PlatformProfile
@@ -58,6 +59,8 @@ class MacNativeApi(Protocol):
     def is_frontmost(self, target: MacTargetContext) -> bool: ...
 
     def send_command_v(self) -> bool: ...
+
+    def send_control_v(self) -> bool: ...
 
 
 class MacFileLockApi(Protocol):
@@ -494,7 +497,8 @@ class PyObjCMacNativeApi:
         if not accessibility_trusted:
             errors.append(
                 "macOS Accessibility access is required for the global hotkey "
-                "and Command+V. Enable VIM2 (or its Python launcher) in System "
+                "and Command+V or Control+V paste injection. Enable VIM2 (or its "
+                "Python launcher) in System "
                 "Settings > Privacy & Security > Accessibility."
             )
 
@@ -607,15 +611,40 @@ class PyObjCMacNativeApi:
 
     def send_command_v(self) -> bool:
         try:
-            command_down = self._quartz.CGEventCreateKeyboardEvent(
-                None, 55, True
+            command_flag = self._quartz.kCGEventFlagMaskCommand
+        except Exception:
+            return False
+        return self._send_modified_v(
+            modifier_keycode=55,
+            modifier_flag=command_flag,
+        )
+
+    def send_control_v(self) -> bool:
+        try:
+            control_flag = self._quartz.kCGEventFlagMaskControl
+        except Exception:
+            return False
+        return self._send_modified_v(
+            modifier_keycode=59,
+            modifier_flag=control_flag,
+        )
+
+    def _send_modified_v(
+        self,
+        *,
+        modifier_keycode: int,
+        modifier_flag: int,
+    ) -> bool:
+        try:
+            modifier_down = self._quartz.CGEventCreateKeyboardEvent(
+                None, modifier_keycode, True
             )
             v_down = self._quartz.CGEventCreateKeyboardEvent(None, 9, True)
             v_up = self._quartz.CGEventCreateKeyboardEvent(None, 9, False)
-            command_up = self._quartz.CGEventCreateKeyboardEvent(
-                None, 55, False
+            modifier_up = self._quartz.CGEventCreateKeyboardEvent(
+                None, modifier_keycode, False
             )
-            events = (command_down, v_down, v_up, command_up)
+            events = (modifier_down, v_down, v_up, modifier_up)
             if any(event is None for event in events):
                 return False
             for event in events:
@@ -624,16 +653,15 @@ class PyObjCMacNativeApi:
                     self._quartz.kCGEventSourceUserData,
                     VIM2_INPUT_MARKER,
                 )
-            command_flag = self._quartz.kCGEventFlagMaskCommand
-            for event in (command_down, v_down, v_up):
-                self._quartz.CGEventSetFlags(event, command_flag)
-            self._quartz.CGEventSetFlags(command_up, 0)
+            for event in (modifier_down, v_down, v_up):
+                self._quartz.CGEventSetFlags(event, modifier_flag)
+            self._quartz.CGEventSetFlags(modifier_up, 0)
         except Exception:
             return False
 
         injection_succeeded = False
         try:
-            for event in (command_down, v_down, v_up):
+            for event in (modifier_down, v_down, v_up):
                 self._quartz.CGEventPost(
                     self._quartz.kCGHIDEventTap, event
                 )
@@ -650,7 +678,7 @@ class PyObjCMacNativeApi:
                     pass
             try:
                 self._quartz.CGEventPost(
-                    self._quartz.kCGHIDEventTap, command_up
+                    self._quartz.kCGHIDEventTap, modifier_up
                 )
             except Exception:
                 injection_succeeded = False
@@ -663,9 +691,17 @@ class MacClipboardPaster:
         api: MacNativeApi,
         *,
         wait_until_hotkey_released: Callable[[], None],
+        paste_shortcut_selection: MacPasteShortcutSelection | None = None,
     ) -> None:
         self._api = api
         self._wait_until_hotkey_released = wait_until_hotkey_released
+        self._paste_shortcut_selection = (
+            paste_shortcut_selection or MacPasteShortcutSelection()
+        )
+
+    @property
+    def paste_shortcut(self) -> MacPasteShortcut:
+        return self._paste_shortcut_selection.shortcut
 
     def paste(self, text: str, target_context: object) -> None:
         if (
@@ -707,16 +743,28 @@ class MacClipboardPaster:
                 "The target macOS application is no longer frontmost or its "
                 "identity changed; recognized text remains in the clipboard."
             )
+        shortcut = self._paste_shortcut_selection.shortcut
+        shortcut_label = (
+            "Command+V"
+            if shortcut is MacPasteShortcut.COMMAND_V
+            else "Control+V"
+        )
+        send_shortcut = (
+            self._api.send_command_v
+            if shortcut is MacPasteShortcut.COMMAND_V
+            else self._api.send_control_v
+        )
         try:
-            injected = self._api.send_command_v()
+            injected = send_shortcut()
         except Exception as exc:
             raise ClipboardPasteError(
-                "Cannot send Command+V; recognized text remains in the "
+                f"Cannot send {shortcut_label}; recognized text remains in the "
                 f"clipboard: {exc}"
             ) from exc
         if not injected:
             raise ClipboardPasteError(
-                "Cannot send Command+V; recognized text remains in the clipboard."
+                f"Cannot send {shortcut_label}; recognized text remains in the "
+                "clipboard."
             )
 
 
@@ -768,10 +816,16 @@ class MacOSPlatformServices:
             raise TypeError("dispatcher must be a HotkeyDispatcher")
         return MacHotkeyListener(dispatcher)
 
-    def create_clipboard_paster(self, hotkey) -> MacClipboardPaster:
+    def create_clipboard_paster(
+        self,
+        hotkey,
+        *,
+        paste_shortcut_selection: MacPasteShortcutSelection | None = None,
+    ) -> MacClipboardPaster:
         return MacClipboardPaster(
             self._native,
             wait_until_hotkey_released=hotkey.wait_until_released,
+            paste_shortcut_selection=paste_shortcut_selection,
         )
 
 

@@ -4,6 +4,7 @@ import ctypes
 
 from vim2.application import SingleInstanceGuard
 from vim2.clipboard import WindowsClipboardPaster
+from vim2.config import MacPasteShortcutSelection
 from vim2.hotkey import HotkeyDispatcher, WindowsHotkeyListener
 from vim2.paths import AppPaths
 from vim2.platform_services import (
@@ -51,7 +52,13 @@ class WindowsPlatformServices:
     @staticmethod
     def create_clipboard_paster(
         hotkey: GlobalHotkeyService,
+        *,
+        paste_shortcut_selection: MacPasteShortcutSelection | None = None,
     ) -> TextPaster:
+        if paste_shortcut_selection is not None:
+            raise ValueError(
+                "Windows paste is fixed at Ctrl+V and has no macOS selection"
+            )
         return WindowsClipboardPaster(
             wait_until_hotkey_released=hotkey.wait_until_released
         )

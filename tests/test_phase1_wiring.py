@@ -17,7 +17,7 @@ from vim2.application import (
     MUTEX_NAME,
     SingleInstanceGuard,
 )
-from vim2.config import Settings, SettingsRepository
+from vim2.config import MacPasteShortcut, Settings, SettingsRepository
 from vim2.models import ModelId
 from vim2.paths import AppPaths
 from vim2.platform_services import (
@@ -94,6 +94,10 @@ class PhaseOneMetadataTests(unittest.TestCase):
         checked_in = SettingsRepository(root / "config").load()
 
         self.assertIs(checked_in.selected_model, ModelId.CPU)
+        self.assertIs(
+            checked_in.macos_paste_shortcut,
+            MacPasteShortcut.COMMAND_V,
+        )
         self.assertEqual(
             {model.value for model in ModelId},
             {

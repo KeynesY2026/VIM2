@@ -9,7 +9,12 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from vim2.audio import AudioRecorder
-from vim2.config import Settings, SettingsRepository
+from vim2.config import (
+    MacPasteShortcut,
+    MacPasteShortcutSelection,
+    Settings,
+    SettingsRepository,
+)
 from vim2.controller import AppController
 from vim2.hotkey import HotkeyDispatcher, parse_hotkey
 from vim2.paths import AppPaths
@@ -91,6 +96,15 @@ def _restart_process(paths: AppPaths) -> None:
     )
 
 
+def _create_macos_paste_shortcut_selection(
+    services: PlatformServices,
+    shortcut: MacPasteShortcut,
+) -> MacPasteShortcutSelection | None:
+    if services.profile.name != "macos":
+        return None
+    return MacPasteShortcutSelection(shortcut)
+
+
 def _prepare_desktop_runtime(
     app: QApplication,
     view: DesktopView,
@@ -140,7 +154,19 @@ def run_qt_application(
         },
     )
     hotkey = services.create_hotkey_listener(dispatcher)
-    paster = services.create_clipboard_paster(hotkey)
+    macos_paste_shortcut_selection = (
+        _create_macos_paste_shortcut_selection(
+            services,
+            settings.macos_paste_shortcut,
+        )
+    )
+    if macos_paste_shortcut_selection is None:
+        paster = services.create_clipboard_paster(hotkey)
+    else:
+        paster = services.create_clipboard_paster(
+            hotkey,
+            paste_shortcut_selection=macos_paste_shortcut_selection,
+        )
     session = VoiceSession(
         machine,
         recorder,
@@ -148,7 +174,14 @@ def run_qt_application(
         paster,
         tail_overlap_seconds=settings.tail_overlap_seconds,
     )
-    view = DesktopView(supported_models=services.supported_models)
+    view = DesktopView(
+        supported_models=services.supported_models,
+        macos_paste_shortcut=(
+            macos_paste_shortcut_selection.shortcut
+            if macos_paste_shortcut_selection is not None
+            else None
+        ),
+    )
     runner = QtTaskRunner()
     controller = AppController(
         machine=machine,
@@ -160,6 +193,7 @@ def run_qt_application(
         task_runner=runner,
         foreground_window=services.capture_target,
         restart_application=lambda: app.exit(RESTART_EXIT_CODE),
+        macos_paste_shortcut_selection=macos_paste_shortcut_selection,
     )
     bridge.toggle_requested.connect(controller.toggle_recording)
     bridge.cancel_requested.connect(controller.cancel)

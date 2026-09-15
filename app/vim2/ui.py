@@ -13,8 +13,7 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
 )
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QGraphicsOpacityEffect,
@@ -27,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from vim2.config import MacPasteShortcut
 from vim2.models import MODEL_SPECS, ModelId
 from vim2.state import AppState
 
@@ -61,6 +61,7 @@ STATUS_TOOLTIPS: dict[AppState, str] = {
 class UiCapabilities:
     can_toggle_recording: bool
     can_switch_model: bool
+    can_switch_paste_shortcut: bool
     can_retry: bool
     can_discard: bool
 
@@ -74,6 +75,7 @@ class UiCapabilities:
                 AppState.LIVE_TRANSCRIBING,
             },
             can_switch_model=state is AppState.READY,
+            can_switch_paste_shortcut=state is AppState.READY,
             can_retry=state is AppState.RETRY_PENDING,
             can_discard=state is AppState.RETRY_PENDING,
         )
@@ -355,6 +357,8 @@ class DesktopView:
     def __init__(
         self,
         supported_models: tuple[ModelId, ...] | None = None,
+        *,
+        macos_paste_shortcut: MacPasteShortcut | None = None,
     ) -> None:
         self._supported_models = frozenset(
             tuple(ModelId) if supported_models is None else supported_models
@@ -383,6 +387,31 @@ class DesktopView:
         for model_id, action in self._model_actions.items():
             action.setCheckable(True)
             action.setVisible(model_id in self._supported_models)
+
+        self.paste_shortcut_menu: QMenu | None = None
+        self.paste_shortcut_action_group: QActionGroup | None = None
+        self.command_v_action: QAction | None = None
+        self.control_v_action: QAction | None = None
+        if macos_paste_shortcut is not None:
+            self.paste_shortcut_menu = self.menu.addMenu("粘贴快捷键")
+            self.paste_shortcut_action_group = QActionGroup(
+                self.paste_shortcut_menu
+            )
+            self.paste_shortcut_action_group.setExclusive(True)
+            self.command_v_action = QAction(
+                "macOS：⌘V", self.paste_shortcut_menu
+            )
+            self.control_v_action = QAction(
+                "Windows / 远程桌面：Ctrl+V",
+                self.paste_shortcut_menu,
+            )
+            for action in (self.command_v_action, self.control_v_action):
+                action.setCheckable(True)
+                self.paste_shortcut_action_group.addAction(action)
+                self.paste_shortcut_menu.addAction(action)
+            self.paste_shortcut_menu.setEnabled(False)
+            self.render_macos_paste_shortcut(macos_paste_shortcut)
+
         self.about_action = QAction("关于")
         self.exit_action = QAction("退出")
 
@@ -428,6 +457,18 @@ class DesktopView:
         self.accurate_model_action.triggered.connect(
             lambda: controller.switch_model(ModelId.ACCURATE)
         )
+        if self.command_v_action is not None:
+            self.command_v_action.triggered.connect(
+                lambda: controller.switch_macos_paste_shortcut(
+                    MacPasteShortcut.COMMAND_V
+                )
+            )
+        if self.control_v_action is not None:
+            self.control_v_action.triggered.connect(
+                lambda: controller.switch_macos_paste_shortcut(
+                    MacPasteShortcut.CONTROL_V
+                )
+            )
         self.about_action.triggered.connect(self._show_about)
         self.exit_action.triggered.connect(quit_callback)
         self.tray.activated.connect(self._on_tray_activated)
@@ -445,6 +486,10 @@ class DesktopView:
         )
         self.recording_action.setText(self._record_action_label(state))
         self.model_menu.setEnabled(capabilities.can_switch_model)
+        if self.paste_shortcut_menu is not None:
+            self.paste_shortcut_menu.setEnabled(
+                capabilities.can_switch_paste_shortcut
+            )
         for action_model_id, action in self._model_actions.items():
             action.setEnabled(
                 capabilities.can_switch_model
@@ -469,6 +514,18 @@ class DesktopView:
             self.overlay.show_for_window(self._target_window)
         elif state is AppState.READY:
             self.overlay.fade_out()
+
+    def render_macos_paste_shortcut(
+        self, shortcut: MacPasteShortcut
+    ) -> None:
+        if self.command_v_action is None or self.control_v_action is None:
+            return
+        self.command_v_action.setChecked(
+            shortcut is MacPasteShortcut.COMMAND_V
+        )
+        self.control_v_action.setChecked(
+            shortcut is MacPasteShortcut.CONTROL_V
+        )
 
     def start_recording_timers(
         self,
