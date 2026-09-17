@@ -138,6 +138,27 @@ def test_final_recognition_uses_complete_recording_then_pastes_and_deletes(
     assert session.state is AppState.READY
 
 
+def test_final_output_adds_spaces_between_chinese_and_english(
+    tmp_path: Path,
+) -> None:
+    artifact = _artifact(tmp_path)
+    paster = FakePaster()
+    session = VoiceSession(
+        _ready_machine(),
+        FakeRecorder(artifact),
+        FakeRecognizer(["使用VS Code处理API请求，部署 Kubernetes服务"]),
+        paster,
+    )
+
+    session.start(target_window=42, model_id=ModelId.FAST)
+    result = session.stop()
+
+    assert result == "使用 VS Code 处理 API 请求，部署 Kubernetes 服务"
+    assert paster.calls == [
+        ("使用 VS Code 处理 API 请求，部署 Kubernetes 服务", 42)
+    ]
+
+
 def test_empty_result_does_not_touch_clipboard(tmp_path: Path) -> None:
     artifact = _artifact(tmp_path)
     paster = FakePaster()

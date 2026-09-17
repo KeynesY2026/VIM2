@@ -3,8 +3,28 @@ import pytest
 from vim2.transcript import (
     StableCheckpoint,
     StablePrefixTracker,
+    format_mixed_language_spacing,
     merge_stable_tail,
 )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("中文EnglishРусский", "中文 English Русский"),
+        ("مرحباEnglish中文", "مرحبا English 中文"),
+        ("東京タワーでテスト", "東京タワーでテスト"),
+        ("𠀀API〇", "𠀀 API 〇"),
+        ("版本2API，Русский", "版本2API，Русский"),
+        ("中文  English", "中文  English"),
+        ("API・仕様A゠B", "API・仕様 A゠B"),
+        ("カ\u3099API e\u0301Русский", "カ\u3099 API e\u0301 Русский"),
+    ],
+)
+def test_mixed_language_spacing_uses_unicode_script_boundaries(
+    text: str, expected: str
+) -> None:
+    assert format_mixed_language_spacing(text) == expected
 
 
 def test_three_identical_complete_prefixes_create_checkpoint() -> None:

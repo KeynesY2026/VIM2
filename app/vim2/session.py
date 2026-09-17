@@ -10,6 +10,7 @@ from vim2.state import AppState, StateMachine
 from vim2.transcript import (
     StableCheckpoint,
     StablePrefixTracker,
+    format_mixed_language_spacing,
     merge_stable_tail,
 )
 
@@ -279,9 +280,10 @@ class VoiceSession:
             raise RuntimeError("Recognition session data is incomplete")
         artifact = self._pending_audio
         try:
-            if text:
-                self._paster.paste(text, self._target_window)
-            return text
+            formatted_text = format_mixed_language_spacing(text)
+            if formatted_text:
+                self._paster.paste(formatted_text, self._target_window)
+            return formatted_text
         finally:
             self._recorder.discard(artifact)
             self._pending_audio = None
