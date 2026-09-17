@@ -19,7 +19,7 @@ MAX_TAIL_OVERLAP_SECONDS = 15
 class Settings:
     selected_model: ModelId = ModelId.FAST
     hotkey: str = DEFAULT_HOTKEY
-    max_recording_seconds: int = 90
+    max_recording_seconds: int = 300
     preview_interval_ms: int = DEFAULT_PREVIEW_INTERVAL_MS
     tail_overlap_seconds: int = DEFAULT_TAIL_OVERLAP_SECONDS
 
@@ -42,10 +42,10 @@ class SettingsRepository:
                 f"Invalid selected_model: {values.get('selected_model')!r}"
             ) from exc
 
-        max_seconds = values.get("max_recording_seconds", 90)
-        if not isinstance(max_seconds, int) or not 1 <= max_seconds <= 90:
+        max_seconds = values.get("max_recording_seconds", 300)
+        if not isinstance(max_seconds, int) or not 1 <= max_seconds <= 300:
             raise ValueError(
-                "max_recording_seconds must be an integer from 1 through 90"
+                "max_recording_seconds must be an integer from 1 through 300"
             )
 
         preview_interval_ms = values.get(

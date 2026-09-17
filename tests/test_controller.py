@@ -334,7 +334,7 @@ def test_record_preview_and_final_result_flow(tmp_path: Path) -> None:
     controller.request_preview()
     controller.toggle_recording()
 
-    assert view.timers_started == [90]
+    assert view.timers_started == [300]
     assert view.preview_intervals == [1_000]
     assert view.previews == ["临时文本"]
     assert paster.calls == [("最终文本", 321)]

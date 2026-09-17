@@ -21,7 +21,7 @@ def test_missing_configuration_uses_documented_defaults(tmp_path: Path) -> None:
     assert settings == Settings(
         selected_model=ModelId.FAST,
         hotkey=DEFAULT_HOTKEY,
-        max_recording_seconds=90,
+        max_recording_seconds=300,
         preview_interval_ms=DEFAULT_PREVIEW_INTERVAL_MS,
         tail_overlap_seconds=DEFAULT_TAIL_OVERLAP_SECONDS,
     )
@@ -87,6 +87,31 @@ def test_invalid_preview_interval_is_reported(
     )
 
     with pytest.raises(ValueError, match="preview_interval_ms"):
+        SettingsRepository(config_dir).load()
+
+
+def test_maximum_recording_duration_is_300_seconds(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(
+        json.dumps({"max_recording_seconds": 300}),
+        encoding="utf-8",
+    )
+
+    assert SettingsRepository(config_dir).load().max_recording_seconds == 300
+
+
+def test_recording_duration_above_300_seconds_is_reported(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(
+        json.dumps({"max_recording_seconds": 301}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="max_recording_seconds"):
         SettingsRepository(config_dir).load()
 
 
