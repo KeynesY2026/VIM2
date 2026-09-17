@@ -42,8 +42,8 @@ VIM2 是 Windows 本地语音输入工具。它能在记事本、浏览器、聊
 
 | 模型 | 设备 | 特点 |
 |---|---|---|
-| Qwen3-ASR 0.6B FP16 | NVIDIA GPU | 速度和准确率均衡 |
 | Qwen3-ASR 0.6B INT8 | CPU | 默认，无需 NVIDIA 显卡 |
+| Qwen3-ASR 0.6B FP16 | NVIDIA GPU | 速度和准确率均衡 |
 | Qwen3-ASR 1.7B INT8 | NVIDIA GPU | 更高精度，处理速度较慢 |
 
 程序一次只加载一个模型。可在托盘的“识别模型”菜单中切换，选择会自动保存。
