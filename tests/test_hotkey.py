@@ -4,6 +4,7 @@ from vim2.hotkey import (
     HotkeyDispatcher,
     HotkeyMatcher,
     KeyEvent,
+    WindowsHotkeyListener,
     key_name_from_virtual_key,
     parse_hotkey,
 )
@@ -149,6 +150,95 @@ def test_dispatcher_allows_rdp_input_but_rejects_lower_integrity_injection() -> 
     ) is True
 
     assert actions == ["toggle", "cancel"]
+
+
+def test_dispatcher_allows_lower_integrity_escape_to_cancel_rdp_recording() -> None:
+    actions: list[str] = []
+    dispatcher = HotkeyDispatcher(
+        parse_hotkey("RightAlt"),
+        on_toggle=lambda: actions.append("toggle"),
+        on_cancel=lambda: actions.append("cancel"),
+        is_cancellable=lambda: True,
+    )
+
+    assert dispatcher.process(
+        KeyEvent("Esc", True),
+        lower_integrity_injected=True,
+        vim2_injected=False,
+    ) is True
+
+    assert actions == ["cancel"]
+
+
+def test_dispatcher_rejects_vim2_injected_escape() -> None:
+    actions: list[str] = []
+    dispatcher = HotkeyDispatcher(
+        parse_hotkey("RightAlt"),
+        on_toggle=lambda: actions.append("toggle"),
+        on_cancel=lambda: actions.append("cancel"),
+        is_cancellable=lambda: True,
+    )
+
+    assert dispatcher.process(
+        KeyEvent("Esc", True),
+        lower_integrity_injected=True,
+        vim2_injected=True,
+    ) is False
+
+    assert actions == []
+
+
+def test_dispatcher_does_not_suppress_rdp_escape_when_not_cancellable() -> None:
+    actions: list[str] = []
+    dispatcher = HotkeyDispatcher(
+        parse_hotkey("RightAlt"),
+        on_toggle=lambda: actions.append("toggle"),
+        on_cancel=lambda: actions.append("cancel"),
+        is_cancellable=lambda: False,
+    )
+
+    assert dispatcher.process(
+        KeyEvent("Esc", True),
+        lower_integrity_injected=True,
+        vim2_injected=False,
+    ) is False
+
+    assert actions == []
+
+
+def test_dispatcher_cancels_once_per_escape_press() -> None:
+    actions: list[str] = []
+    dispatcher = HotkeyDispatcher(
+        parse_hotkey("RightAlt"),
+        on_toggle=lambda: actions.append("toggle"),
+        on_cancel=lambda: actions.append("cancel"),
+        is_cancellable=lambda: True,
+    )
+
+    for is_down in (True, True, False, True):
+        dispatcher.process(
+            KeyEvent("Esc", is_down),
+            lower_integrity_injected=False,
+            vim2_injected=False,
+        )
+
+    assert actions == ["cancel", "cancel"]
+
+
+def test_listener_polls_escape_when_rdp_does_not_emit_hook_event() -> None:
+    actions: list[str] = []
+    dispatcher = HotkeyDispatcher(
+        parse_hotkey("RightAlt"),
+        on_toggle=lambda: actions.append("toggle"),
+        on_cancel=lambda: actions.append("cancel"),
+        is_cancellable=lambda: True,
+    )
+    listener = WindowsHotkeyListener(dispatcher)
+
+    listener._poll_escape(lambda virtual_key: 0x8000)
+    listener._poll_escape(lambda virtual_key: 0)
+
+    assert actions == ["cancel"]
 
 
 def test_virtual_key_mapping_preserves_modifier_side() -> None:
