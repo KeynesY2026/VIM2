@@ -1,3 +1,5 @@
+import time
+
 from vim2.hotkey import (
     HotkeyDispatcher,
     HotkeyMatcher,
@@ -64,6 +66,51 @@ def test_invalid_hotkey_is_rejected() -> None:
 
 def test_semantically_duplicate_aliases_are_collapsed() -> None:
     assert parse_hotkey("Ctrl+Control+K").keys == ("Ctrl", "K")
+
+
+def test_dispatcher_debounces_rapid_second_toggle(monkeypatch) -> None:
+    now = 10.0
+    monkeypatch.setattr(time, "monotonic", lambda: now)
+    actions: list[str] = []
+    dispatcher = HotkeyDispatcher(
+        parse_hotkey("RightAlt"),
+        on_toggle=lambda: actions.append("toggle"),
+        on_cancel=lambda: None,
+        is_cancellable=lambda: False,
+    )
+
+    dispatcher.process(
+        KeyEvent("RightAlt", True),
+        lower_integrity_injected=False,
+        vim2_injected=False,
+    )
+    dispatcher.process(
+        KeyEvent("RightAlt", False),
+        lower_integrity_injected=False,
+        vim2_injected=False,
+    )
+    now += 0.1
+    dispatcher.process(
+        KeyEvent("RightAlt", True),
+        lower_integrity_injected=False,
+        vim2_injected=False,
+    )
+
+    assert actions == ["toggle"]
+
+    dispatcher.process(
+        KeyEvent("RightAlt", False),
+        lower_integrity_injected=False,
+        vim2_injected=False,
+    )
+    now += 0.2
+    dispatcher.process(
+        KeyEvent("RightAlt", True),
+        lower_integrity_injected=False,
+        vim2_injected=False,
+    )
+
+    assert actions == ["toggle", "toggle"]
 
 
 def test_dispatcher_allows_rdp_input_but_rejects_lower_integrity_injection() -> None:

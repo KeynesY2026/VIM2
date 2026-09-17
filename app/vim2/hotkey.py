@@ -3,11 +3,13 @@ from __future__ import annotations
 import re
 import ctypes
 import threading
+import time
 from dataclasses import dataclass
 from ctypes import wintypes
 from typing import Callable
 
 VIM2_INPUT_MARKER = 0x56494D32
+_TOGGLE_DEBOUNCE_SECONDS = 0.25
 
 _GENERIC_MODIFIERS = {
     "Ctrl": frozenset({"LeftCtrl", "RightCtrl"}),
@@ -193,6 +195,7 @@ class HotkeyDispatcher:
         self._is_cancellable = is_cancellable
         self._released = threading.Event()
         self._released.set()
+        self._last_toggle_at = float("-inf")
 
     def process(
         self,
@@ -212,7 +215,10 @@ class HotkeyDispatcher:
         else:
             self._released.clear()
         if decision.triggered:
-            self._on_toggle()
+            now = time.monotonic()
+            if now - self._last_toggle_at >= _TOGGLE_DEBOUNCE_SECONDS:
+                self._last_toggle_at = now
+                self._on_toggle()
         return decision.suppress
 
     def wait_until_released(self, timeout: float | None = None) -> None:
