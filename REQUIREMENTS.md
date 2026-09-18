@@ -278,6 +278,7 @@ VIM2/
 | `max_recording_seconds` | 整数 | `300` | 1–300 |
 | `preview_interval_ms` | 整数 | `1000` | 250–1000 |
 | `tail_overlap_seconds` | 整数 | `5` | 1–15 |
+| `normalize_numbers` | 布尔值 | `true` | `true`、`false`；控制可移除的中英文数字后处理器 |
 
 缺少可选字段时使用默认值；字段类型或范围无效时，启动检查必须报告明确错误。
 

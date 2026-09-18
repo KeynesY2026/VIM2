@@ -23,6 +23,7 @@ from vim2.hotkey import (
 )
 from vim2.hotwords import HotwordRepository
 from vim2.paths import AppPaths
+from vim2.postprocessing import create_text_postprocessor
 from vim2.recognizer import QwenRecognizer
 from vim2.session import VoiceSession
 from vim2.state import AppState, StateMachine
@@ -171,6 +172,9 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
         recognizer,
         paster,
         tail_overlap_seconds=settings.tail_overlap_seconds,
+        text_postprocessor=create_text_postprocessor(
+            normalize_numbers=settings.normalize_numbers
+        ),
     )
     view = DesktopView()
     runner = QtTaskRunner()

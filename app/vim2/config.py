@@ -22,6 +22,7 @@ class Settings:
     max_recording_seconds: int = 300
     preview_interval_ms: int = DEFAULT_PREVIEW_INTERVAL_MS
     tail_overlap_seconds: int = DEFAULT_TAIL_OVERLAP_SECONDS
+    normalize_numbers: bool = True
 
 
 class SettingsRepository:
@@ -74,6 +75,10 @@ class SettingsRepository:
                 "tail_overlap_seconds must be an integer from 1 through 15"
             )
 
+        normalize_numbers = values.get("normalize_numbers", True)
+        if not isinstance(normalize_numbers, bool):
+            raise ValueError("normalize_numbers must be a boolean")
+
         hotkey = DEFAULT_HOTKEY
         if self._hotkey_path.is_file():
             hotkey = self._hotkey_path.read_text(encoding="utf-8").strip()
@@ -86,6 +91,7 @@ class SettingsRepository:
             max_recording_seconds=max_seconds,
             preview_interval_ms=preview_interval_ms,
             tail_overlap_seconds=tail_overlap_seconds,
+            normalize_numbers=normalize_numbers,
         )
 
     def save(self, settings: Settings) -> None:

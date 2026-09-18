@@ -24,6 +24,7 @@ def test_missing_configuration_uses_documented_defaults(tmp_path: Path) -> None:
         max_recording_seconds=300,
         preview_interval_ms=DEFAULT_PREVIEW_INTERVAL_MS,
         tail_overlap_seconds=DEFAULT_TAIL_OVERLAP_SECONDS,
+        normalize_numbers=True,
     )
 
 
@@ -35,6 +36,7 @@ def test_settings_round_trip_in_portable_config_directory(tmp_path: Path) -> Non
         max_recording_seconds=45,
         preview_interval_ms=500,
         tail_overlap_seconds=7,
+        normalize_numbers=False,
     )
 
     repository.save(settings)
@@ -51,7 +53,22 @@ def test_settings_round_trip_in_portable_config_directory(tmp_path: Path) -> Non
         "preview_interval_ms": 500,
         "selected_model": "qwen3-asr-1.7b-int8",
         "tail_overlap_seconds": 7,
+        "normalize_numbers": False,
     }
+
+
+def test_invalid_number_normalization_setting_is_reported(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(
+        json.dumps({"normalize_numbers": "yes"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="normalize_numbers"):
+        SettingsRepository(config_dir).load()
 
 
 def test_cpu_model_can_be_selected(tmp_path: Path) -> None:

@@ -1,5 +1,6 @@
 {
   "max_recording_seconds": 300,
+  "normalize_numbers": true,
   "preview_interval_ms": 1000,
   "selected_model": "qwen3-asr-0.6b-int8-cpu",
   "tail_overlap_seconds": 5

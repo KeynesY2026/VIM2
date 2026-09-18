@@ -5,12 +5,15 @@ from typing import Protocol
 
 from vim2.audio import AudioArtifact
 from vim2.models import ModelId
+from vim2.postprocessing import (
+    TextPostProcessor,
+    TextPostProcessingPipeline,
+)
 from vim2.recognizer import TranscriptionCancelled
 from vim2.state import AppState, StateMachine
 from vim2.transcript import (
     StableCheckpoint,
     StablePrefixTracker,
-    format_mixed_language_spacing,
     merge_stable_tail,
 )
 
@@ -64,6 +67,7 @@ class VoiceSession:
         paster: Paster,
         *,
         tail_overlap_seconds: int = 5,
+        text_postprocessor: TextPostProcessor | None = None,
     ) -> None:
         self._machine = state_machine
         self._recorder = recorder
@@ -77,6 +81,9 @@ class VoiceSession:
         self._stable_prefix = StablePrefixTracker()
         self._capture_sealed = False
         self._tail_overlap_seconds = tail_overlap_seconds
+        self._text_postprocessor = (
+            text_postprocessor or TextPostProcessingPipeline()
+        )
 
     @property
     def state(self) -> AppState:
@@ -280,7 +287,7 @@ class VoiceSession:
             raise RuntimeError("Recognition session data is incomplete")
         artifact = self._pending_audio
         try:
-            formatted_text = format_mixed_language_spacing(text)
+            formatted_text = self._text_postprocessor.process(text)
             if formatted_text:
                 self._paster.paste(formatted_text, self._target_window)
             return formatted_text

@@ -159,6 +159,27 @@ def test_final_output_adds_spaces_between_chinese_and_english(
     ]
 
 
+def test_final_output_uses_injected_text_postprocessor(
+    tmp_path: Path,
+) -> None:
+    class PrefixPostProcessor:
+        def process(self, text: str) -> str:
+            return f"processed: {text}"
+
+    artifact = _artifact(tmp_path)
+    session = VoiceSession(
+        _ready_machine(),
+        FakeRecorder(artifact),
+        FakeRecognizer(["one hundred files"]),
+        FakePaster(),
+        text_postprocessor=PrefixPostProcessor(),
+    )
+
+    session.start(target_window=42, model_id=ModelId.FAST)
+
+    assert session.stop() == "processed: one hundred files"
+
+
 def test_empty_result_does_not_touch_clipboard(tmp_path: Path) -> None:
     artifact = _artifact(tmp_path)
     paster = FakePaster()
