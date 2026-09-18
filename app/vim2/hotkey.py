@@ -196,7 +196,6 @@ class HotkeyDispatcher:
         self._released = threading.Event()
         self._released.set()
         self._last_toggle_at = float("-inf")
-        self._escape_down = False
 
     def process(
         self,
@@ -205,16 +204,11 @@ class HotkeyDispatcher:
         lower_integrity_injected: bool,
         vim2_injected: bool,
     ) -> bool:
-        if vim2_injected:
+        if lower_integrity_injected or vim2_injected:
             return False
-        if event.key == "Esc":
-            was_down = self._escape_down
-            self._escape_down = event.is_down
-            if event.is_down and not was_down and self._is_cancellable():
-                self._on_cancel()
-                return True
-        if lower_integrity_injected:
-            return False
+        if event.key == "Esc" and event.is_down and self._is_cancellable():
+            self._on_cancel()
+            return True
         decision = self._matcher.process(event)
         if self._matcher.is_fully_released:
             self._released.set()
@@ -243,15 +237,12 @@ class _LowLevelKeyboardInput(ctypes.Structure):
 
 class WindowsHotkeyListener:
     _WH_KEYBOARD_LL = 13
-    _VK_ESCAPE = 0x1B
     _WM_KEYDOWN = 0x0100
     _WM_KEYUP = 0x0101
     _WM_SYSKEYDOWN = 0x0104
     _WM_SYSKEYUP = 0x0105
-    _WM_TIMER = 0x0113
     _WM_QUIT = 0x0012
     _LLKHF_LOWER_IL_INJECTED = 0x02
-    _ESCAPE_POLL_INTERVAL_MS = 25
 
     def __init__(self, dispatcher: HotkeyDispatcher) -> None:
         self._dispatcher = dispatcher
@@ -288,16 +279,6 @@ class WindowsHotkeyListener:
     def wait_until_released(self, timeout: float | None = None) -> None:
         self._dispatcher.wait_until_released(timeout)
 
-    def _poll_escape(self, get_async_key_state: Callable[[int], int]) -> None:
-        self._dispatcher.process(
-            KeyEvent(
-                "Esc",
-                bool(get_async_key_state(self._VK_ESCAPE) & 0x8000),
-            ),
-            lower_integrity_injected=False,
-            vim2_injected=False,
-        )
-
     def _message_loop(self) -> None:
         user32 = ctypes.WinDLL("user32", use_last_error=True)
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -321,17 +302,6 @@ class WindowsHotkeyListener:
             wintypes.LPARAM,
         )
         user32.CallNextHookEx.restype = wintypes.LPARAM
-        user32.GetAsyncKeyState.argtypes = (ctypes.c_int,)
-        user32.GetAsyncKeyState.restype = ctypes.c_short
-        user32.SetTimer.argtypes = (
-            wintypes.HWND,
-            wintypes.WPARAM,
-            wintypes.UINT,
-            ctypes.c_void_p,
-        )
-        user32.SetTimer.restype = wintypes.WPARAM
-        user32.KillTimer.argtypes = (wintypes.HWND, wintypes.WPARAM)
-        user32.KillTimer.restype = wintypes.BOOL
 
         def hook_callback(
             code: int, message: int, data_address: int
@@ -373,21 +343,11 @@ class WindowsHotkeyListener:
             )
             self._ready.set()
             return
-        timer_id = user32.SetTimer(
-            None,
-            0,
-            self._ESCAPE_POLL_INTERVAL_MS,
-            None,
-        )
         self._ready.set()
         message = wintypes.MSG()
         while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
-            if timer_id and message.message == self._WM_TIMER:
-                self._poll_escape(user32.GetAsyncKeyState)
             user32.TranslateMessage(ctypes.byref(message))
             user32.DispatchMessageW(ctypes.byref(message))
-        if timer_id:
-            user32.KillTimer(None, timer_id)
         user32.UnhookWindowsHookEx(self._hook)
         self._hook = None
         self._callback = None
