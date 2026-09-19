@@ -53,7 +53,7 @@ python -m vim2 --check
 
 在 `config/hotwords.txt` 中每行填写一个人名、产品名或专业术语，然后从托盘选择“重新加载热词”。热词会提高相关词出现的概率，但不会强制替换识别结果。
 
-- `config/settings.json`：模型、最长录音时间和实时预览设置。临时的数字后处理可通过 `normalize_numbers` 独立开关。
+- `config/settings.json`：模型、最长录音时间和实时预览设置。`preview_window_seconds` 控制单次预览最多使用的最近音频（默认 8 秒），`tail_overlap_seconds` 控制稳定句子边界前保留的重叠音频（默认 5 秒）；两者用途不同。临时的数字后处理可通过 `normalize_numbers` 独立开关。
 - `config/hotkey.conf`：全局热键，默认是 `RightAlt`。
 - `config/hotwords.txt`：一行一个热词或短语。
 
