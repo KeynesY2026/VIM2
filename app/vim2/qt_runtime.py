@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 import logging
 import os
 import sys
@@ -11,18 +10,18 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
-from vim2.application import SingleInstanceGuard
 from vim2.audio import AudioRecorder
-from vim2.clipboard import WindowsClipboardPaster
-from vim2.config import Settings, SettingsRepository
-from vim2.controller import AppController
-from vim2.hotkey import (
-    HotkeyDispatcher,
-    WindowsHotkeyListener,
-    parse_hotkey,
+from vim2.config import (
+    MacPasteShortcut,
+    MacPasteShortcutSelection,
+    Settings,
+    SettingsRepository,
 )
+from vim2.controller import AppController
+from vim2.hotkey import HotkeyDispatcher, parse_hotkey
 from vim2.hotwords import HotwordRepository
 from vim2.paths import AppPaths
+from vim2.platform_services import PlatformServices, create_platform_services
 from vim2.postprocessing import create_text_postprocessor
 from vim2.recognizer import QwenRecognizer
 from vim2.session import VoiceSession
@@ -87,17 +86,6 @@ class _HotkeyBridge(QObject):
     cancel_requested = Signal()
 
 
-def _enable_per_monitor_dpi() -> None:
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
-
-
-def _foreground_window() -> int:
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    user32.GetForegroundWindow.restype = ctypes.c_void_p
-    return int(user32.GetForegroundWindow() or 0)
-
-
 def _open_local_file(path: Path) -> bool:
     return QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
@@ -120,6 +108,15 @@ def _restart_process(paths: AppPaths) -> None:
     )
 
 
+def _create_macos_paste_shortcut_selection(
+    services: PlatformServices,
+    shortcut: MacPasteShortcut,
+) -> MacPasteShortcutSelection | None:
+    if services.profile.name != "macos":
+        return None
+    return MacPasteShortcutSelection(shortcut)
+
+
 def _prepare_desktop_runtime(
     app: QApplication,
     view: DesktopView,
@@ -132,13 +129,19 @@ def _prepare_desktop_runtime(
     controller.start()
 
 
-def run_qt_application(paths: AppPaths, settings: Settings) -> int:
-    _enable_per_monitor_dpi()
+def run_qt_application(
+    paths: AppPaths,
+    settings: Settings,
+    *,
+    platform_services: PlatformServices | None = None,
+) -> int:
+    services = platform_services or create_platform_services(paths)
+    services.enable_desktop_features()
     app = QApplication(sys.argv)
     app.setApplicationName("VIM2")
     app.setQuitOnLastWindowClosed(False)
 
-    guard = SingleInstanceGuard()
+    guard = services.create_single_instance_guard()
     if not guard.acquire():
         QMessageBox.information(None, "VIM2", "VIM2 已经在运行。")
         return 0
@@ -162,10 +165,20 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
             AppState.RETRY_PENDING,
         },
     )
-    hotkey = WindowsHotkeyListener(dispatcher)
-    paster = WindowsClipboardPaster(
-        wait_until_hotkey_released=hotkey.wait_until_released
+    hotkey = services.create_hotkey_listener(dispatcher)
+    macos_paste_shortcut_selection = (
+        _create_macos_paste_shortcut_selection(
+            services,
+            settings.macos_paste_shortcut,
+        )
     )
+    if macos_paste_shortcut_selection is None:
+        paster = services.create_clipboard_paster(hotkey)
+    else:
+        paster = services.create_clipboard_paster(
+            hotkey,
+            paste_shortcut_selection=macos_paste_shortcut_selection,
+        )
     session = VoiceSession(
         machine,
         recorder,
@@ -176,7 +189,14 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
             normalize_numbers=settings.normalize_numbers
         ),
     )
-    view = DesktopView()
+    view = DesktopView(
+        supported_models=services.supported_models,
+        macos_paste_shortcut=(
+            macos_paste_shortcut_selection.shortcut
+            if macos_paste_shortcut_selection is not None
+            else None
+        ),
+    )
     runner = QtTaskRunner()
     controller = AppController(
         machine=machine,
@@ -186,8 +206,9 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
         session=session,
         view=view,
         task_runner=runner,
-        foreground_window=_foreground_window,
+        foreground_window=services.capture_target,
         restart_application=lambda: app.exit(RESTART_EXIT_CODE),
+        macos_paste_shortcut_selection=macos_paste_shortcut_selection,
         open_hotwords_file=lambda: _open_hotwords_file(paths.hotwords_file),
     )
     bridge.toggle_requested.connect(controller.toggle_recording)
@@ -196,7 +217,7 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
 
     try:
         hotkey.start()
-    except (OSError, RuntimeError) as exc:
+    except (ImportError, OSError, RuntimeError) as exc:
         QMessageBox.critical(
             None, "VIM2", f"无法注册全局热键 {settings.hotkey}：{exc}"
         )

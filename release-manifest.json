@@ -6,9 +6,9 @@
   "models": {
     "qwen3-asr-0.6b-int8-cpu": {
       "directory": ".models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
-      "model_id": "zengshuishui/Qwen3-ASR-onnx",
+      "model_id": "csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
       "precision": "ONNX INT8 (sherpa-onnx CPU provider)",
-      "revision": "2026-03-25"
+      "revision": "68818b2313fe77bd06f6a7c5068ff3ef59d02b8a"
     },
     "qwen3-asr-0.6b-fp16": {
       "directory": ".models/Qwen3-ASR-0.6B",

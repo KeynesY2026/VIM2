@@ -5,6 +5,7 @@ from typing import Protocol
 
 from vim2.config import Settings
 from vim2.paths import AppPaths
+from vim2.platform_services import PlatformServices, create_platform_services
 
 ERROR_ALREADY_EXISTS = 183
 MUTEX_NAME = r"Local\VIM2.SingleInstance"
@@ -47,6 +48,8 @@ class _NativeMutexApi:
 
 
 class SingleInstanceGuard:
+    """Legacy Windows mutex guard retained at its original public import path."""
+
     def __init__(
         self,
         *,
@@ -78,7 +81,22 @@ class SingleInstanceGuard:
             self._handle = None
 
 
-def run_desktop_application(paths: AppPaths, settings: Settings) -> int:
+__all__ = [
+    "ERROR_ALREADY_EXISTS",
+    "MUTEX_NAME",
+    "MutexApi",
+    "SingleInstanceGuard",
+    "run_desktop_application",
+]
+
+
+def run_desktop_application(
+    paths: AppPaths,
+    settings: Settings,
+    *,
+    platform_services: PlatformServices | None = None,
+) -> int:
     from vim2.qt_runtime import run_qt_application
 
-    return run_qt_application(paths, settings)
+    services = platform_services or create_platform_services(paths)
+    return run_qt_application(paths, settings, platform_services=services)

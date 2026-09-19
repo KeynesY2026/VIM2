@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -7,6 +8,7 @@ from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
 import vim2.qt_runtime as qt_runtime
+from vim2.config import MacPasteShortcut, MacPasteShortcutSelection
 from vim2.models import ModelId
 from vim2.qt_runtime import QtTaskRunner
 
@@ -72,6 +74,29 @@ def test_qt_task_runner_surfaces_unexpected_worker_exception() -> None:
     assert results == []
     assert len(errors) == 1
     assert isinstance(errors[0], KeyError)
+
+
+def test_macos_runtime_restores_a_typed_shared_shortcut_selection() -> None:
+    services = SimpleNamespace(profile=SimpleNamespace(name="macos"))
+
+    selection = qt_runtime._create_macos_paste_shortcut_selection(
+        services,
+        MacPasteShortcut.CONTROL_V,
+    )
+
+    assert isinstance(selection, MacPasteShortcutSelection)
+    assert selection.shortcut is MacPasteShortcut.CONTROL_V
+
+
+def test_windows_runtime_does_not_create_a_macos_shortcut_selection() -> None:
+    services = SimpleNamespace(profile=SimpleNamespace(name="windows"))
+
+    selection = qt_runtime._create_macos_paste_shortcut_selection(
+        services,
+        MacPasteShortcut.COMMAND_V,
+    )
+
+    assert selection is None
 
 
 def test_model_runtime_initializes_on_ui_thread_after_tray_is_visible() -> None:

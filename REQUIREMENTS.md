@@ -35,13 +35,33 @@ VIM2 是 VIM 第一版的后续版本。产品继续提供 Windows 全局语音�
 - 本版本不提供模型和运行环境完整性校验。
 - 本版本不提供更丰富的输入法上下文或文本格式化功能。
 
+### 1.4 macOS Apple Silicon Phase 1 边界
+
+本文其余未特别标注的平台要求仍以 Windows 为准。macOS Phase 1 只允许原生
+arm64 Python 3.11 和既有 `qwen3-asr-0.6b-int8-cpu` / sherpa-onnx CPU
+后端；快速与高精度 CUDA 模型必须在平台预检处拒绝，不得静默 fallback。
+模型仍从应用根目录的
+`.models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25` 离线加载。
+
+macOS 启动必须明确检查 Rosetta、Python 版本、模型完整性、CPU 与 PyObjC
+原生依赖，并对辅助功能、输入监控和已拒绝/受限的麦克风权限给出可执行错误。
+全局热键映射右 Option 到既有 RightAlt 语义；最终文本使用 NSPasteboard、恢复
+目标应用，并按 macOS 配置发送 Command+V（默认、本机 Mac）或 Control+V
+（Windows / 远程桌面）。Windows 的 Win32 mutex、热键、剪贴板、固定 Ctrl+V、
+三个模型和启动脚本行为不得改变，且不引入 Command 键语义。
+
+Phase 1 不声称已验证真实 M1 推理、TCC 全流程、应用兼容矩阵、签名、公证或
+正式 `.app` 发布；这些项目必须在 Apple Silicon 真机与稳定签名身份下验收。
+
 ## 2. 用户流程
 
 ### 2.1 首次启动
 
 1. 用户双击 Portable 目录中的 `Start.cmd`，由隐藏的 Windows PowerShell 启动 VIM2。
 2. 程序验证 Python、模型和所选后端依赖是否可用；仅 GPU 模式验证 CUDA。
-3. 程序加载上次选择的模型；首次运行默认选择 Qwen3-ASR 0.6B FP16。
+3. 程序加载上次选择的模型；仓库当前检入配置选择 0.6B INT8 CPU。Windows
+   配置缺失或省略 `selected_model` 时仍按原行为回退到 Qwen3-ASR 0.6B FP16；
+   macOS Phase 1 只允许 CPU。
 4. 加载期间显示明确状态，不允许用户误以为程序已经可以录音。
 5. 加载成功后程序进入系统托盘，并提示全局热键已经可用。
 
@@ -67,6 +87,18 @@ VIM2 是 VIM 第一版的后续版本。产品继续提供 Windows 全局语音�
 任意时刻只允许一个 ASR 模型驻留内存和显存。
 
 只有“就绪”状态允许切换模型。录音、实时识别、最终识别期间，以及存在等待重试的音频时，模型菜单必须禁用。重试必须继续使用失败时选中的模型；用户取消录音或放弃待重试音频后才能切换。
+
+### 2.4 macOS 粘贴快捷键切换
+
+1. macOS 用户从托盘“粘贴快捷键”子菜单选择“macOS：⌘V”或
+   “Windows / 远程桌面：Ctrl+V”。
+2. 两个选项互斥，当前生效项必须显示选中标记。
+3. 选择成功后立即用于后续粘贴，写入 Portable 配置并在下次启动恢复。
+4. 仅“就绪”状态允许切换；录音、实时识别、最终识别、等待重试、模型切换等
+   状态必须禁用菜单，避免会话中途改变。
+5. 持久化失败时必须显示错误，并继续使用和显示此前有效选择；运行时不使用可抛出
+   异常的回调更新或二次回滚。
+6. Windows 不显示此菜单，Windows 本机粘贴仍固定使用 Ctrl+V。
 
 ## 3. 功能需求
 
@@ -124,8 +156,12 @@ VIM2 是 VIM 第一版的后续版本。产品继续提供 Windows 全局语音�
 ### 3.5 自动粘贴
 
 - 最终文本应粘贴到录音开始时处于前台的目标窗口。
-- 粘贴行为沿用 VIM 第一版的剪贴板与 SendInput 机制。
-- 程序将最终结果以 Unicode 文本写入系统剪贴板，恢复录音开始时记录的目标窗口，然后发送一次 Ctrl+V。
+- Windows 粘贴行为沿用 VIM 第一版的剪贴板与 SendInput 机制：程序将最终结果以
+  Unicode 文本写入系统剪贴板，恢复录音开始时记录的目标窗口，然后固定发送一次
+  Ctrl+V；macOS 选项不得改变 Windows 行为或为 Windows 引入 Command 键语义。
+- macOS 使用 NSPasteboard 并恢复、复核录音开始时的目标应用；本机 Mac 默认发送
+  Command+V，Windows / 远程桌面场景可发送 Control+V。两种事件序列都必须携带
+  VIM2 marker，并在部分注入失败时安全释放 V 键和修饰键。
 - 粘贴后不恢复用户原有剪贴板内容；最终识别文本保留在剪贴板中。
 - 兼容常规桌面应用和远程桌面场景。
 - 粘贴失败时显示明确错误，不得静默丢失识别结果。
@@ -141,6 +177,9 @@ VIM2 是 VIM 第一版的后续版本。产品继续提供 Windows 全局语音�
   - Qwen3-ASR 0.6B INT8。
   - Qwen3-ASR 0.6B FP16。
   - Qwen3-ASR 1.7B INT8。
+- macOS 专用的“粘贴快捷键”子菜单。
+  - macOS：⌘V。
+  - Windows / 远程桌面：Ctrl+V。
 - 关于。
 - 退出。
 
@@ -195,8 +234,11 @@ VIM2 是 VIM 第一版的后续版本。产品继续提供 Windows 全局语音�
 | 显示名称 | 模型 | 精度 | 默认 |
 |---|---|---|---|
 | CPU 模型 | Qwen3-ASR 0.6B ONNX | INT8 | 否 |
-| 快速模型 | Qwen3-ASR 0.6B | FP16 | 是 |
+| 快速模型 | Qwen3-ASR 0.6B | FP16 | 是（Windows 字段缺失时） |
 | 高精度模型 | Qwen3-ASR 1.7B | INT8 | 否 |
+
+“默认”列描述 Windows 的缺省回退语义；仓库当前检入配置选择 CPU。Windows 可
+选择全部三个模型，macOS Phase 1 只允许 CPU。
 
 - GPU 模式必须使用官方 Qwen3-ASR 权重。
 - 如交付预量化权重，应记录来源、原始 revision、量化方法和校验值。
@@ -223,7 +265,7 @@ VIM2 是 VIM 第一版的后续版本。产品继续提供 Windows 全局语音�
 ### 4.2 模型生命周期
 
 - 程序启动时只加载用户选中的模型。
-- 默认主流程使用 0.6B FP16；1.7B INT8 仅在用户主动选择高精度模式后使用。
+- Windows 配置省略 `selected_model` 时默认主流程仍使用 0.6B FP16；仓库当前检入配置选择 CPU。1.7B INT8 仅在 Windows 用户主动选择高精度模式后使用，macOS Phase 1 不允许该模型。
 - 常规语音输入期间模型保持驻留，避免每次识别重复加载。
 - 切换模型时必须卸载旧模型并释放 GPU 后再加载新模型。
 - 若新模型加载失败，应显示错误并允许恢复到上一个可用模型。
@@ -274,13 +316,20 @@ VIM2/
 
 | 字段 | 类型 | 默认值 | 有效范围或取值 |
 |---|---|---:|---|
-| `selected_model` | 字符串 | `qwen3-asr-0.6b-fp16` | `qwen3-asr-0.6b-fp16`、`qwen3-asr-1.7b-int8` |
+| `selected_model` | 字符串 | `qwen3-asr-0.6b-fp16`（Windows 字段缺失回退） | `qwen3-asr-0.6b-int8-cpu`（CPU）、`qwen3-asr-0.6b-fp16`（FAST）、`qwen3-asr-1.7b-int8`（ACCURATE）；macOS Phase 1 仅 CPU |
 | `max_recording_seconds` | 整数 | `300` | 1–300 |
 | `preview_interval_ms` | 整数 | `1000` | 250–1000 |
 | `tail_overlap_seconds` | 整数 | `5` | 1–15 |
+| `macos_paste_shortcut` | 字符串 | `command-v` | `command-v`（本机 Mac 的 ⌘V）或 `control-v`（Windows / 远程桌面的 Ctrl+V）；仅影响 macOS |
 | `normalize_numbers` | 布尔值 | `true` | `true`、`false`；控制可移除的中英文数字后处理器 |
 
 缺少可选字段时使用默认值；字段类型或范围无效时，启动检查必须报告明确错误。
+`macos_paste_shortcut` 缺失时兼容既有配置并使用 `command-v`；非法值必须拒绝，
+不得静默回退。选择变化必须只对 `settings.json` 做单文件原子替换，不得重写
+`hotkey.conf`；原子替换成功后才更新共享运行时选择和菜单，失败时磁盘、运行时与
+菜单均保持旧值。Windows 本机始终使用 Ctrl+V。
+当前检入的 `config/settings.json` 明确选择 `qwen3-asr-0.6b-int8-cpu`，因此不触发
+Windows 的字段缺失回退。
 
 ### 4.4 离线与隐私
 
@@ -300,6 +349,9 @@ VIM2/
 │ 识别模型                     ▶  │
 │   ✓ 快速：Qwen3-ASR 0.6B FP16   │
 │     高精度：Qwen3-ASR 1.7B INT8 │
+│ 粘贴快捷键                   ▶  │  ← 仅 macOS
+│   ✓ macOS：⌘V                   │
+│     Windows / 远程桌面：Ctrl+V  │
 ├─────────────────────────────────┤
 │ 关于                            │
 │ 退出                            │
@@ -373,7 +425,7 @@ NVIDIA RTX A2000 Laptop GPU，4GB 显存
 - 0.6B INT8 CPU 最终识别 RTF 必须小于 1.0，且不要求 CUDA/NVML 显存指标。
 - 1.7B INT8 最终识别 RTF 必须小于 1.0。
 - 实时临时文本按统一配置间隔请求，默认 1000 毫秒，可配置为 250–1000 毫秒；前一次推理未完成时用最新请求覆盖旧的待处理请求，队列容量不得超过一个。
-- 默认 0.6B 模型开始录音后应尽快显示第一段非空临时文本；在目标设备和固定验收语料上，存在新语音时的预览完成间隔 P95 目标不超过 3 秒。
+- Windows 缺省 0.6B FP16 模型开始录音后应尽快显示第一段非空临时文本；在目标设备和固定验收语料上，存在新语音时的预览完成间隔 P95 目标不超过 3 秒。macOS CPU 模型须在真机另行建立基线。
 - 实时识别不得导致录音丢帧或 UI 卡死。
 - 0.6B FP16 峰值显存不得超过 2.5 GiB。
 - 1.7B INT8 峰值显存不得超过 3.8 GiB。
@@ -394,7 +446,7 @@ NVIDIA RTX A2000 Laptop GPU，4GB 显存
 | 0.6B FP16 | 44.745 秒 | 9.97 秒 | 0.223 | 1.80 GiB |
 | 1.7B INT8 | 44.745 秒 | 44.66 秒 | 0.998 | 2.81 GiB |
 
-同一音轨的 1.7B 尾段耗时为：4 秒音频 4.22 秒、8 秒音频 6.77 秒、12 秒音频 9.82 秒。149.235 秒长录音的 latest-wins 模拟中，0.6B 平均刷新间隔为 2.52 秒，1.7B 为 10.20 秒。因此 0.6B 是默认主模型；latest-wins 用于限制积压，不用于掩盖模型本身的推理延迟。
+同一音轨的 1.7B 尾段耗时为：4 秒音频 4.22 秒、8 秒音频 6.77 秒、12 秒音频 9.82 秒。149.235 秒长录音的 latest-wins 模拟中，0.6B 平均刷新间隔为 2.52 秒，1.7B 为 10.20 秒。因此 0.6B FP16 仍是 Windows 字段缺失时的缺省主模型；仓库当前检入配置选择 CPU。latest-wins 用于限制积压，不用于掩盖模型本身的推理延迟。
 
 性能验收统一采用以下方法：
 

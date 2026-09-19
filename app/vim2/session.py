@@ -51,7 +51,7 @@ class Recognizer(Protocol):
 
 
 class Paster(Protocol):
-    def paste(self, text: str, target_window: int) -> None: ...
+    def paste(self, text: str, target_context: object) -> None: ...
 
 
 class FinalRecognitionError(RuntimeError):
@@ -73,7 +73,7 @@ class VoiceSession:
         self._recorder = recorder
         self._recognizer = recognizer
         self._paster = paster
-        self._target_window: int | None = None
+        self._target_window: object | None = None
         self._model_id: ModelId | None = None
         self._pending_audio: AudioArtifact | None = None
         self._warnings: tuple[str, ...] = ()
@@ -93,7 +93,7 @@ class VoiceSession:
     def warnings(self) -> tuple[str, ...]:
         return self._warnings
 
-    def start(self, *, target_window: int, model_id: ModelId) -> None:
+    def start(self, *, target_window: object, model_id: ModelId) -> None:
         if self.state is not AppState.READY:
             raise RuntimeError(f"Cannot start recording while {self.state.value}")
         self._recorder.start()

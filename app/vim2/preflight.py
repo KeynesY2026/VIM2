@@ -12,6 +12,7 @@ from vim2.models import (
     validate_model_directory,
 )
 from vim2.paths import AppPaths
+from vim2.platform_services import PlatformProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,10 +30,12 @@ class PreflightChecker:
         paths: AppPaths,
         python_version: tuple[int, int, int] | None = None,
         dependency_finder: Callable[[str], object | None] = find_spec,
+        platform_profile: PlatformProfile | None = None,
     ) -> None:
         self._paths = paths
         self._python_version = python_version or sys.version_info[:3]
         self._dependency_finder = dependency_finder
+        self._platform_profile = platform_profile
 
     def check(
         self,
@@ -49,12 +52,44 @@ class PreflightChecker:
                 "install Python 3.10 through 3.13."
             )
 
+        profile = self._platform_profile
+        if profile is not None and profile.preflight_errors:
+            errors.extend(profile.preflight_errors)
+            return PreflightResult(tuple(errors))
+        if (
+            profile is not None
+            and profile.required_python is not None
+            and self._python_version[:2] != profile.required_python
+        ):
+            required = ".".join(str(part) for part in profile.required_python)
+            current = ".".join(str(part) for part in self._python_version[:2])
+            errors.append(
+                f"The {profile.name} CPU MVP requires Python {required}; "
+                f"the current interpreter is Python {current}."
+            )
+            return PreflightResult(tuple(errors))
+        if profile is not None and selected_model not in profile.supported_models:
+            supported = ", ".join(
+                model_id.value for model_id in profile.supported_models
+            ) or "none"
+            errors.append(
+                f"The {profile.name} runtime supports only: {supported}. "
+                f"Select {ModelId.CPU.value} in config/settings.json. "
+                "No alternative model or backend will be selected automatically."
+            )
+            return PreflightResult(tuple(errors))
+
         spec = MODEL_SPECS[selected_model]
         model_dir = self._paths.models_dir / spec.directory_name
         model_errors = validate_model_directory(model_dir, spec.backend)
         if model_errors:
             errors.append(f"Model is incomplete: {model_dir}")
             errors.extend(model_errors)
+            if profile is not None and profile.name == "macos":
+                errors.append(
+                    f"Copy the complete sherpa-onnx CPU model to {model_dir}. "
+                    "No CUDA or MPS fallback will be attempted."
+                )
 
         if check_runtime:
             if spec.backend is ModelBackend.SHERPA_ONNX_CPU:
@@ -76,11 +111,29 @@ class PreflightChecker:
                     "soundfile",
                     "transformers",
                 )
+            if profile is not None:
+                modules += profile.required_modules
+            modules = tuple(dict.fromkeys(modules))
+            missing_platform_module = False
             for module in modules:
                 if self._dependency_finder(module) is None:
                     errors.append(
                         f"Python dependency is missing: {module}"
                     )
+                    if (
+                        profile is not None
+                        and module in profile.required_modules
+                    ):
+                        missing_platform_module = True
+            if (
+                profile is not None
+                and profile.name == "macos"
+                and missing_platform_module
+            ):
+                errors.append(
+                    "Install the macOS CPU dependencies with: "
+                    "python -m pip install -r requirements-macos-cpu.lock"
+                )
 
         if check_cuda and spec.backend is ModelBackend.QWEN_CUDA:
             errors.extend(self._check_cuda())
