@@ -6,6 +6,7 @@ import pytest
 from vim2.config import (
     DEFAULT_HOTKEY,
     DEFAULT_PREVIEW_INTERVAL_MS,
+    DEFAULT_PREVIEW_WINDOW_SECONDS,
     DEFAULT_TAIL_OVERLAP_SECONDS,
     Settings,
     SettingsRepository,
@@ -30,6 +31,7 @@ def test_missing_configuration_uses_documented_defaults(tmp_path: Path) -> None:
         hotkey=DEFAULT_HOTKEY,
         max_recording_seconds=300,
         preview_interval_ms=DEFAULT_PREVIEW_INTERVAL_MS,
+        preview_window_seconds=DEFAULT_PREVIEW_WINDOW_SECONDS,
         tail_overlap_seconds=DEFAULT_TAIL_OVERLAP_SECONDS,
         normalize_numbers=True,
     )
@@ -42,6 +44,7 @@ def test_settings_round_trip_in_portable_config_directory(tmp_path: Path) -> Non
         hotkey="LeftCtrl+RightAlt",
         max_recording_seconds=45,
         preview_interval_ms=500,
+        preview_window_seconds=9,
         tail_overlap_seconds=7,
         normalize_numbers=False,
     )
@@ -58,6 +61,7 @@ def test_settings_round_trip_in_portable_config_directory(tmp_path: Path) -> Non
     assert persisted == {
         "max_recording_seconds": 45,
         "preview_interval_ms": 500,
+        "preview_window_seconds": 9,
         "selected_model": "qwen3-asr-1.7b-int8",
         "tail_overlap_seconds": 7,
         "normalize_numbers": False,
@@ -198,6 +202,21 @@ def test_invalid_preview_interval_is_reported(
     )
 
     with pytest.raises(ValueError, match="preview_interval_ms"):
+        SettingsRepository(config_dir).load()
+
+
+@pytest.mark.parametrize("seconds", [0, 31, 8.0, "8"])
+def test_invalid_preview_window_is_reported(
+    tmp_path: Path, seconds: object
+) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(
+        json.dumps({"preview_window_seconds": seconds}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="preview_window_seconds"):
         SettingsRepository(config_dir).load()
 
 

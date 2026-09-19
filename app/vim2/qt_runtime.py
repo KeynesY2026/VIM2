@@ -172,6 +172,7 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
         recognizer,
         paster,
         tail_overlap_seconds=settings.tail_overlap_seconds,
+        preview_window_seconds=settings.preview_window_seconds,
         text_postprocessor=create_text_postprocessor(
             normalize_numbers=settings.normalize_numbers
         ),

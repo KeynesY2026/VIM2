@@ -10,6 +10,9 @@ DEFAULT_HOTKEY = "RightAlt"
 DEFAULT_PREVIEW_INTERVAL_MS = 1_000
 MIN_PREVIEW_INTERVAL_MS = 250
 MAX_PREVIEW_INTERVAL_MS = 1_000
+DEFAULT_PREVIEW_WINDOW_SECONDS = 8
+MIN_PREVIEW_WINDOW_SECONDS = 1
+MAX_PREVIEW_WINDOW_SECONDS = 30
 DEFAULT_TAIL_OVERLAP_SECONDS = 5
 MIN_TAIL_OVERLAP_SECONDS = 1
 MAX_TAIL_OVERLAP_SECONDS = 15
@@ -21,6 +24,7 @@ class Settings:
     hotkey: str = DEFAULT_HOTKEY
     max_recording_seconds: int = 300
     preview_interval_ms: int = DEFAULT_PREVIEW_INTERVAL_MS
+    preview_window_seconds: int = DEFAULT_PREVIEW_WINDOW_SECONDS
     tail_overlap_seconds: int = DEFAULT_TAIL_OVERLAP_SECONDS
     normalize_numbers: bool = True
 
@@ -67,6 +71,19 @@ class SettingsRepository:
                 "preview_interval_ms must be an integer from 250 through 1000"
             )
 
+        preview_window_seconds = values.get(
+            "preview_window_seconds", DEFAULT_PREVIEW_WINDOW_SECONDS
+        )
+        if (
+            not isinstance(preview_window_seconds, int)
+            or not MIN_PREVIEW_WINDOW_SECONDS
+            <= preview_window_seconds
+            <= MAX_PREVIEW_WINDOW_SECONDS
+        ):
+            raise ValueError(
+                "preview_window_seconds must be an integer from 1 through 30"
+            )
+
         tail_overlap_seconds = values.get(
             "tail_overlap_seconds", DEFAULT_TAIL_OVERLAP_SECONDS
         )
@@ -95,6 +112,7 @@ class SettingsRepository:
             hotkey=hotkey,
             max_recording_seconds=max_seconds,
             preview_interval_ms=preview_interval_ms,
+            preview_window_seconds=preview_window_seconds,
             tail_overlap_seconds=tail_overlap_seconds,
             normalize_numbers=normalize_numbers,
         )
