@@ -185,59 +185,40 @@ class VoiceSession:
     ) -> tuple[str, bool]:
         max_frames = artifact.sample_rate * self._preview_window_seconds
         checkpoint = self._stable_prefix.checkpoint
+        start_frame = max(0, artifact.frame_count - max_frames)
         if checkpoint is not None:
             overlap_frames = (
                 artifact.sample_rate * self._tail_overlap_seconds
             )
             start_frame = max(
-                0,
+                start_frame,
                 checkpoint.frame_count
                 - overlap_frames
                 - artifact.start_frame,
-                artifact.frame_count - max_frames,
             )
-            if start_frame > 0:
-                window: AudioArtifact | None = None
-                try:
-                    window = self._recorder.slice_from(
-                        artifact, start_frame
-                    )
-                    self._log_preview_window(window, model_id)
-                    text = self._recognizer.transcribe(
-                        window, model_id, cancel_event=cancel_event
-                    ).strip()
-                    merged = merge_stable_tail(checkpoint, text)
-                    if merged is not None:
-                        return merged, True
-                    return text, False
-                finally:
-                    if window is not None:
-                        self._recorder.discard(window)
-        if artifact.frame_count <= max_frames:
-            self._log_preview_window(artifact, model_id)
-            text = self._recognizer.transcribe(
-                artifact, model_id, cancel_event=cancel_event
-            ).strip()
-            return text, True
 
-        window: AudioArtifact | None = None
+        window = artifact
+        sliced_window: AudioArtifact | None = None
         try:
-            window = self._recorder.slice_from(
-                artifact, artifact.frame_count - max_frames
-            )
+            if start_frame > 0:
+                sliced_window = self._recorder.slice_from(
+                    artifact, start_frame
+                )
+                window = sliced_window
             self._log_preview_window(window, model_id)
             text = self._recognizer.transcribe(
                 window, model_id, cancel_event=cancel_event
             ).strip()
-            checkpoint = self._stable_prefix.checkpoint
             if checkpoint is not None:
                 merged = merge_stable_tail(checkpoint, text)
                 if merged is not None:
                     return merged, True
-            return text, False
+                return text, False
+            is_complete = artifact.start_frame == 0 and start_frame == 0
+            return text, is_complete
         finally:
-            if window is not None:
-                self._recorder.discard(window)
+            if sliced_window is not None:
+                self._recorder.discard(sliced_window)
 
     @staticmethod
     def _log_preview_window(

@@ -334,7 +334,39 @@ def test_long_live_preview_only_transcribes_bounded_recent_audio(
     assert recognizer.calls[-1] == (artifact, ModelId.ACCURATE)
 
 
-def test_stable_checkpoint_uses_snapshot_absolute_end_frame(
+def test_stable_checkpoint_uses_bounded_snapshot_absolute_end_frame(
+    tmp_path: Path,
+) -> None:
+    recorder = FakeRecorder(_long_artifact(tmp_path))
+    snapshots = iter(
+        [
+            AudioArtifact(np.zeros(96_000, dtype=np.float32), 16_000),
+            AudioArtifact(
+                np.zeros(128_000, dtype=np.float32),
+                16_000,
+                start_frame=32_000,
+            ),
+        ]
+    )
+    recorder.snapshot = lambda max_seconds=None: next(snapshots)
+    session = VoiceSession(
+        _ready_machine(),
+        recorder,
+        FakeRecognizer(
+            ["第一句。第二句。未完成", "第一句。第二句。第三句。"]
+        ),
+        FakePaster(),
+    )
+    session.start(target_window=7, model_id=ModelId.FAST)
+
+    session.preview()
+    session.preview()
+
+    assert session._stable_prefix.checkpoint is not None
+    assert session._stable_prefix.checkpoint.frame_count == 160_000
+
+
+def test_bounded_snapshot_without_anchor_does_not_advance_checkpoint(
     tmp_path: Path,
 ) -> None:
     recorder = FakeRecorder(_long_artifact(tmp_path))
@@ -351,8 +383,7 @@ def test_stable_checkpoint_uses_snapshot_absolute_end_frame(
 
     session.preview()
 
-    assert session._stable_prefix.checkpoint is not None
-    assert session._stable_prefix.checkpoint.frame_count == 448_000
+    assert session._stable_prefix.checkpoint is None
 
 
 def test_bounded_preview_merges_an_exact_stable_sentence_anchor(
