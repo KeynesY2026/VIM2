@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Protocol
 
@@ -18,7 +19,7 @@ from vim2.transcript import (
 )
 
 MAX_TAIL_RATIO = 0.70
-MAX_PREVIEW_SECONDS = 12
+MAX_PREVIEW_SECONDS = 8
 RECOGNITION_ERRORS = (OSError, RuntimeError, ValueError, MemoryError)
 
 
@@ -29,7 +30,9 @@ class Recorder(Protocol):
 
     def stop(self) -> AudioArtifact: ...
 
-    def snapshot(self) -> AudioArtifact: ...
+    def snapshot(
+        self, max_seconds: int | None = None
+    ) -> AudioArtifact: ...
 
     def slice_from(
         self, artifact: AudioArtifact, start_frame: int
@@ -67,6 +70,7 @@ class VoiceSession:
         paster: Paster,
         *,
         tail_overlap_seconds: int = 5,
+        preview_window_seconds: int | None = None,
         text_postprocessor: TextPostProcessor | None = None,
     ) -> None:
         self._machine = state_machine
@@ -81,6 +85,11 @@ class VoiceSession:
         self._stable_prefix = StablePrefixTracker()
         self._capture_sealed = False
         self._tail_overlap_seconds = tail_overlap_seconds
+        self._preview_window_seconds = (
+            MAX_PREVIEW_SECONDS
+            if preview_window_seconds is None
+            else preview_window_seconds
+        )
         self._text_postprocessor = (
             text_postprocessor or TextPostProcessingPipeline()
         )
@@ -148,14 +157,16 @@ class VoiceSession:
             raise RuntimeError("No recording is in progress")
         if cancel_event is not None and cancel_event.is_set():
             raise TranscriptionCancelled()
-        artifact = self._recorder.snapshot()
+        artifact = self._recorder.snapshot(
+            max_seconds=self._preview_window_seconds
+        )
         self._machine.transition_to(AppState.LIVE_TRANSCRIBING)
         try:
             text, is_complete = self._recognize_preview(
                 artifact, self._model_id, cancel_event=cancel_event
             )
             if is_complete:
-                self._stable_prefix.observe(text, artifact.frame_count)
+                self._stable_prefix.observe(text, artifact.end_frame)
             return text
         finally:
             self._recorder.discard(artifact)
@@ -172,7 +183,7 @@ class VoiceSession:
         *,
         cancel_event: threading.Event | None,
     ) -> tuple[str, bool]:
-        max_frames = artifact.sample_rate * MAX_PREVIEW_SECONDS
+        max_frames = artifact.sample_rate * self._preview_window_seconds
         checkpoint = self._stable_prefix.checkpoint
         if checkpoint is not None:
             overlap_frames = (
@@ -180,7 +191,9 @@ class VoiceSession:
             )
             start_frame = max(
                 0,
-                checkpoint.frame_count - overlap_frames,
+                checkpoint.frame_count
+                - overlap_frames
+                - artifact.start_frame,
                 artifact.frame_count - max_frames,
             )
             if start_frame > 0:
@@ -189,6 +202,7 @@ class VoiceSession:
                     window = self._recorder.slice_from(
                         artifact, start_frame
                     )
+                    self._log_preview_window(window, model_id)
                     text = self._recognizer.transcribe(
                         window, model_id, cancel_event=cancel_event
                     ).strip()
@@ -200,6 +214,7 @@ class VoiceSession:
                     if window is not None:
                         self._recorder.discard(window)
         if artifact.frame_count <= max_frames:
+            self._log_preview_window(artifact, model_id)
             text = self._recognizer.transcribe(
                 artifact, model_id, cancel_event=cancel_event
             ).strip()
@@ -210,6 +225,7 @@ class VoiceSession:
             window = self._recorder.slice_from(
                 artifact, artifact.frame_count - max_frames
             )
+            self._log_preview_window(window, model_id)
             text = self._recognizer.transcribe(
                 window, model_id, cancel_event=cancel_event
             ).strip()
@@ -222,6 +238,18 @@ class VoiceSession:
         finally:
             if window is not None:
                 self._recorder.discard(window)
+
+    @staticmethod
+    def _log_preview_window(
+        artifact: AudioArtifact, model_id: ModelId
+    ) -> None:
+        logging.getLogger(__name__).info(
+            "Preview transcription input: model=%s duration=%.3fs frames=%d-%d",
+            model_id,
+            artifact.duration_seconds,
+            artifact.start_frame,
+            artifact.end_frame,
+        )
 
     def _recognize_pending(self, *, allow_tail: bool) -> str:
         if (

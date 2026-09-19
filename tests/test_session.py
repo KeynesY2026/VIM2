@@ -23,6 +23,7 @@ class FakeRecorder:
         self.seal_error: Exception | None = None
         self.slice_error: Exception | None = None
         self.snapshots: list[AudioArtifact] = []
+        self.snapshot_max_seconds: list[int | None] = []
         self.slices: list[tuple[AudioArtifact, int, AudioArtifact]] = []
         self.seal_calls = 0
 
@@ -40,7 +41,10 @@ class FakeRecorder:
         self.seal_calls += 1
         self.started = False
 
-    def snapshot(self) -> AudioArtifact:
+    def snapshot(
+        self, max_seconds: int | None = None
+    ) -> AudioArtifact:
+        self.snapshot_max_seconds.append(max_seconds)
         frame_count = (
             self.snapshots[-1].frame_count + 16_000
             if self.snapshots
@@ -62,6 +66,7 @@ class FakeRecorder:
             samples=artifact.samples[start_frame:],
             sample_rate=artifact.sample_rate,
             warnings=artifact.warnings,
+            start_frame=artifact.start_frame + start_frame,
         )
         self.slices.append((artifact, start_frame, tail))
         return tail
@@ -279,7 +284,11 @@ def test_live_preview_uses_stable_checkpoint_tail_before_window_limit(
         ]
     )
     session = VoiceSession(
-        _ready_machine(), recorder, recognizer, FakePaster()
+        _ready_machine(),
+        recorder,
+        recognizer,
+        FakePaster(),
+        preview_window_seconds=12,
     )
     session.start(target_window=7, model_id=ModelId.ACCURATE)
 
@@ -303,23 +312,47 @@ def test_long_live_preview_only_transcribes_bounded_recent_audio(
     ]
     recognizer = FakeRecognizer(["最近的文本", "完整文本"])
     session = VoiceSession(
-        _ready_machine(), recorder, recognizer, FakePaster()
+        _ready_machine(),
+        recorder,
+        recognizer,
+        FakePaster(),
+        preview_window_seconds=8,
     )
     session.start(target_window=7, model_id=ModelId.ACCURATE)
 
     assert session.preview() == "最近的文本"
 
+    assert recorder.snapshot_max_seconds == [8]
     complete, start_frame, window = recorder.slices[0]
     assert complete.frame_count == 656_000
-    assert start_frame == complete.frame_count - (
-        complete.sample_rate * MAX_PREVIEW_SECONDS
-    )
-    assert window.duration_seconds == MAX_PREVIEW_SECONDS
+    assert start_frame == complete.frame_count - (complete.sample_rate * 8)
+    assert window.duration_seconds == 8
     assert recognizer.calls == [(window, ModelId.ACCURATE)]
     assert window in recorder.discarded
     assert complete in recorder.discarded
     assert session.stop() == "完整文本"
     assert recognizer.calls[-1] == (artifact, ModelId.ACCURATE)
+
+
+def test_stable_checkpoint_uses_snapshot_absolute_end_frame(
+    tmp_path: Path,
+) -> None:
+    recorder = FakeRecorder(_long_artifact(tmp_path))
+    snapshot = AudioArtifact(
+        np.zeros(128_000, dtype=np.float32),
+        16_000,
+        start_frame=320_000,
+    )
+    recorder.snapshot = lambda max_seconds=None: snapshot
+    session = VoiceSession(
+        _ready_machine(), recorder, FakeRecognizer(["第一句。第二句。"]), FakePaster()
+    )
+    session.start(target_window=7, model_id=ModelId.FAST)
+
+    session.preview()
+
+    assert session._stable_prefix.checkpoint is not None
+    assert session._stable_prefix.checkpoint.frame_count == 448_000
 
 
 def test_bounded_preview_merges_an_exact_stable_sentence_anchor(
@@ -339,7 +372,11 @@ def test_bounded_preview_merges_an_exact_stable_sentence_anchor(
         ]
     )
     session = VoiceSession(
-        _ready_machine(), recorder, recognizer, FakePaster()
+        _ready_machine(),
+        recorder,
+        recognizer,
+        FakePaster(),
+        preview_window_seconds=12,
     )
     session.start(target_window=7, model_id=ModelId.FAST)
     for _ in range(3):
