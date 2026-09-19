@@ -166,6 +166,58 @@ def test_snapshot_does_not_hold_capture_lock_during_audio_concatenation(
     recorder.cancel()
 
 
+def test_audio_artifact_tracks_absolute_frame_bounds() -> None:
+    artifact = AudioArtifact(
+        np.array([0.1, 0.2, 0.3], dtype=np.float32),
+        sample_rate=4,
+        start_frame=10,
+    )
+
+    assert artifact.frame_count == 3
+    assert artifact.end_frame == 13
+
+
+def test_bounded_snapshot_only_joins_requested_recent_chunks() -> None:
+    backend = FakeSoundDevice()
+    recorder = AudioRecorder(sounddevice=backend, sample_rate=2)
+    recorder.start()
+    assert backend.stream is not None
+    callback = backend.stream.kwargs["callback"]
+    callback(np.array([[1.0], [2.0]], dtype=np.float32), 2, None, None)
+    callback(np.array([[3.0], [4.0]], dtype=np.float32), 2, None, None)
+    callback(np.array([[5.0], [6.0]], dtype=np.float32), 2, None, None)
+    joined_frame_counts = []
+    original_join = recorder._join_chunks
+
+    def record_joined_chunks(chunks):
+        joined_frame_counts.append(sum(len(chunk) for chunk in chunks))
+        return original_join(chunks)
+
+    recorder._join_chunks = record_joined_chunks
+
+    snapshot = recorder.snapshot(max_seconds=2)
+
+    np.testing.assert_array_equal(
+        snapshot.samples,
+        np.array([3.0, 4.0, 5.0, 6.0], dtype=np.float32),
+    )
+    assert snapshot.start_frame == 2
+    assert snapshot.end_frame == 6
+    assert joined_frame_counts == [4]
+    recorder.cancel()
+
+
+@pytest.mark.parametrize("max_seconds", [0, -1])
+def test_snapshot_rejects_non_positive_bound(max_seconds: int) -> None:
+    recorder = AudioRecorder(sounddevice=FakeSoundDevice())
+    recorder.start()
+
+    with pytest.raises(ValueError, match="max_seconds"):
+        recorder.snapshot(max_seconds=max_seconds)
+
+    recorder.cancel()
+
+
 def test_slice_from_returns_requested_audio_suffix_in_memory(
     tmp_path: Path,
 ) -> None:
@@ -182,6 +234,8 @@ def test_slice_from_returns_requested_audio_suffix_in_memory(
         tail.samples, np.array([0.3, 0.4], dtype=np.float32)
     )
     assert tail.frame_count == 2
+    assert tail.start_frame == 2
+    assert tail.end_frame == 4
     assert tail.sample_rate == 4
     assert tail.warnings == complete.warnings
     assert list(tmp_path.iterdir()) == []
