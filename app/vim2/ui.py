@@ -513,6 +513,8 @@ class DesktopView:
         self._max_timer.stop()
 
     def show_preview(self, text: str) -> None:
+        if text == self._latest_preview:
+            return
         self._latest_preview = text
         self.overlay.set_recording(preview=text)
 

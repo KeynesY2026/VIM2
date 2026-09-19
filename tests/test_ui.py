@@ -240,6 +240,24 @@ def test_live_transcribing_updates_intermediate_preview() -> None:
     assert view.overlay.status_text == "正在录音"
 
 
+def test_identical_preview_does_not_repaint_overlay() -> None:
+    _app()
+    view = DesktopView()
+    updates = []
+    original_set_recording = view.overlay.set_recording
+
+    def record_update(*, preview: str) -> None:
+        updates.append(preview)
+        original_set_recording(preview=preview)
+
+    view.overlay.set_recording = record_update
+
+    view.show_preview("相同文本")
+    view.show_preview("相同文本")
+
+    assert updates == ["相同文本"]
+
+
 def test_finalizing_shows_recognizing_state_with_latest_preview() -> None:
     _app()
     view = DesktopView()
