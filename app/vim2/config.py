@@ -29,12 +29,17 @@ class SettingsRepository:
     def __init__(self, config_dir: Path) -> None:
         self._config_dir = config_dir
         self._settings_path = config_dir / "settings.json"
+        self._local_settings_path = Path.home() / ".vim2" / "settings.local.json"
         self._hotkey_path = config_dir / "hotkey.conf"
 
     def load(self) -> Settings:
         values: dict[str, object] = {}
         if self._settings_path.is_file():
             values = json.loads(self._settings_path.read_text(encoding="utf-8"))
+        if self._local_settings_path.is_file():
+            values.update(
+                json.loads(self._local_settings_path.read_text(encoding="utf-8"))
+            )
 
         try:
             model = ModelId(values.get("selected_model", ModelId.FAST))
@@ -110,6 +115,30 @@ class SettingsRepository:
             + "\n",
         )
         self._write_atomic(self._hotkey_path, f"{settings.hotkey}\n")
+
+    def save_selected_model(self, model_id: ModelId) -> None:
+        settings_path = (
+            self._local_settings_path
+            if self._local_settings_path.is_file()
+            else self._settings_path
+        )
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_values: dict[str, object] = {}
+        if settings_path.is_file():
+            settings_values = json.loads(
+                settings_path.read_text(encoding="utf-8")
+            )
+        settings_values["selected_model"] = model_id.value
+        self._write_atomic(
+            settings_path,
+            json.dumps(
+                settings_values,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+        )
 
     @staticmethod
     def _write_atomic(path: Path, content: str) -> None:

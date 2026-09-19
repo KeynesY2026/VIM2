@@ -129,9 +129,13 @@ class FakePaster:
 class FakeSettingsRepository:
     def __init__(self) -> None:
         self.saved: list[Settings] = []
+        self.saved_models: list[ModelId] = []
 
     def save(self, settings: Settings) -> None:
         self.saved.append(settings)
+
+    def save_selected_model(self, model_id: ModelId) -> None:
+        self.saved_models.append(model_id)
 
 
 class FakeView:
@@ -229,7 +233,8 @@ def test_cross_backend_model_switch_restarts_without_loading_both_runtimes(
     controller.switch_model(ModelId.FAST)
 
     assert recognizer.switched == []
-    assert repository.saved[-1].selected_model is ModelId.FAST
+    assert repository.saved_models == [ModelId.FAST]
+    assert repository.saved == []
     assert restart_calls == [True]
 
 
@@ -371,7 +376,8 @@ def test_model_switch_persists_only_after_success(tmp_path: Path) -> None:
     assert recognizer.switched == [ModelId.ACCURATE]
     switching_index = view.states.index(AppState.MODEL_SWITCHING)
     assert view.rendered_models[switching_index] is ModelId.ACCURATE
-    assert repository.saved[-1].selected_model is ModelId.ACCURATE
+    assert repository.saved_models == [ModelId.ACCURATE]
+    assert repository.saved == []
     assert controller.state is AppState.READY
 
 

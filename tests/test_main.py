@@ -1,10 +1,19 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import vim2.application as application_module
 import vim2.main as main_module
 from vim2.main import run
 from vim2.models import MODEL_SPECS, ModelId
+
+
+@pytest.fixture(autouse=True)
+def isolate_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home_dir))
 
 
 def _create_minimal_model(root: Path) -> None:

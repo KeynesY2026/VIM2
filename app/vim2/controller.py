@@ -15,6 +15,8 @@ from vim2.state import AppState, StateMachine
 class SettingsWriter(Protocol):
     def save(self, settings: Settings) -> None: ...
 
+    def save_selected_model(self, model_id: ModelId) -> None: ...
+
 
 class ModelLifecycle(Protocol):
     @property
@@ -327,7 +329,7 @@ class AppController:
             self._settings = replace(
                 self._settings, selected_model=model_id
             )
-            self._settings_repository.save(self._settings)
+            self._settings_repository.save_selected_model(model_id)
             self._restart_application()
             return
         self._machine.transition_to(AppState.MODEL_SWITCHING)
@@ -344,7 +346,7 @@ class AppController:
     ) -> None:
         del result
         self._settings = replace(self._settings, selected_model=model_id)
-        self._settings_repository.save(self._settings)
+        self._settings_repository.save_selected_model(model_id)
         self._operation_busy = False
         self._machine.transition_to(AppState.READY)
         self._render()

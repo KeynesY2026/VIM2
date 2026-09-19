@@ -21,10 +21,11 @@ VIM2 是 Windows 本地语音输入工具。它能在记事本、浏览器、聊
 
 完成安装后，双击 `Start.cmd`。等待任务栏右下角的 VIM2 托盘图标变为绿色。
 
-双击后没有反应时，运行 `start.bat` 查看错误。安装检查命令为：
+双击后没有反应时，查看 `runtime/vim2.log`。安装检查命令为：
 
 ```powershell
-.\start.bat --check
+$env:PYTHONPATH = "$PWD\app"
+python -m vim2 --check
 ```
 
 ## 使用

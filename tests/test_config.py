@@ -13,6 +13,13 @@ from vim2.config import (
 from vim2.models import ModelId
 
 
+@pytest.fixture(autouse=True)
+def isolate_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home_dir))
+
+
 def test_missing_configuration_uses_documented_defaults(tmp_path: Path) -> None:
     repository = SettingsRepository(tmp_path / "config")
 
@@ -55,6 +62,93 @@ def test_settings_round_trip_in_portable_config_directory(tmp_path: Path) -> Non
         "tail_overlap_seconds": 7,
         "normalize_numbers": False,
     }
+
+
+def test_save_selected_model_does_not_add_default_settings(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    settings_path = config_dir / "settings.json"
+    settings_path.write_text(
+        json.dumps({"normalize_numbers": False}),
+        encoding="utf-8",
+    )
+
+    SettingsRepository(config_dir).save_selected_model(ModelId.ACCURATE)
+
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+        "normalize_numbers": False,
+        "selected_model": ModelId.ACCURATE.value,
+    }
+
+
+def test_save_selected_model_leaves_portable_settings_unchanged_when_local_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    settings_path = config_dir / "settings.json"
+    original_content = '{"selected_model": "qwen3-asr-0.6b-fp16"}\n'
+    settings_path.write_text(original_content, encoding="utf-8")
+    home_dir = tmp_path / "home"
+    local_config_dir = home_dir / ".vim2"
+    local_config_dir.mkdir(parents=True)
+    local_settings_path = local_config_dir / "settings.local.json"
+    local_settings_path.write_text(
+        json.dumps(
+            {
+                "normalize_numbers": False,
+                "selected_model": ModelId.CPU.value,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home_dir))
+
+    repository = SettingsRepository(config_dir)
+    repository.save_selected_model(ModelId.ACCURATE)
+
+    assert settings_path.read_text(encoding="utf-8") == original_content
+    assert json.loads(local_settings_path.read_text(encoding="utf-8")) == {
+        "normalize_numbers": False,
+        "selected_model": ModelId.ACCURATE.value,
+    }
+    assert repository.load().selected_model is ModelId.ACCURATE
+
+
+def test_local_settings_in_home_directory_override_portable_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(
+        json.dumps(
+            {
+                "max_recording_seconds": 45,
+                "normalize_numbers": True,
+                "selected_model": ModelId.FAST.value,
+            }
+        ),
+        encoding="utf-8",
+    )
+    home_dir = tmp_path / "home"
+    local_config_dir = home_dir / ".vim2"
+    local_config_dir.mkdir(parents=True)
+    (local_config_dir / "settings.local.json").write_text(
+        json.dumps(
+            {
+                "normalize_numbers": False,
+                "selected_model": ModelId.ACCURATE.value,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home_dir))
+
+    settings = SettingsRepository(config_dir).load()
+
+    assert settings.max_recording_seconds == 45
+    assert settings.normalize_numbers is False
+    assert settings.selected_model is ModelId.ACCURATE
 
 
 def test_invalid_number_normalization_setting_is_reported(
