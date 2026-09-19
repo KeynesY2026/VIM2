@@ -35,10 +35,11 @@ class MacPasteShortcutSelection:
 class Settings:
     selected_model: ModelId = ModelId.FAST
     hotkey: str = DEFAULT_HOTKEY
-    max_recording_seconds: int = 90
+    max_recording_seconds: int = 300
     preview_interval_ms: int = DEFAULT_PREVIEW_INTERVAL_MS
     tail_overlap_seconds: int = DEFAULT_TAIL_OVERLAP_SECONDS
     macos_paste_shortcut: MacPasteShortcut = MacPasteShortcut.COMMAND_V
+    normalize_numbers: bool = True
 
 
 class SettingsRepository:
@@ -76,10 +77,10 @@ class SettingsRepository:
                 f"{allowed}"
             ) from exc
 
-        max_seconds = values.get("max_recording_seconds", 90)
-        if not isinstance(max_seconds, int) or not 1 <= max_seconds <= 90:
+        max_seconds = values.get("max_recording_seconds", 300)
+        if not isinstance(max_seconds, int) or not 1 <= max_seconds <= 300:
             raise ValueError(
-                "max_recording_seconds must be an integer from 1 through 90"
+                "max_recording_seconds must be an integer from 1 through 300"
             )
 
         preview_interval_ms = values.get(
@@ -108,6 +109,10 @@ class SettingsRepository:
                 "tail_overlap_seconds must be an integer from 1 through 15"
             )
 
+        normalize_numbers = values.get("normalize_numbers", True)
+        if not isinstance(normalize_numbers, bool):
+            raise ValueError("normalize_numbers must be a boolean")
+
         hotkey = DEFAULT_HOTKEY
         if self._hotkey_path.is_file():
             hotkey = self._hotkey_path.read_text(encoding="utf-8").strip()
@@ -121,6 +126,7 @@ class SettingsRepository:
             preview_interval_ms=preview_interval_ms,
             tail_overlap_seconds=tail_overlap_seconds,
             macos_paste_shortcut=macos_paste_shortcut,
+            normalize_numbers=normalize_numbers,
         )
 
     def save(self, settings: Settings) -> None:

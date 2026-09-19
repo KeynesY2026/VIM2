@@ -76,10 +76,11 @@ def test_missing_configuration_uses_documented_defaults(tmp_path: Path) -> None:
     assert settings == Settings(
         selected_model=ModelId.FAST,
         hotkey=DEFAULT_HOTKEY,
-        max_recording_seconds=90,
+        max_recording_seconds=300,
         preview_interval_ms=DEFAULT_PREVIEW_INTERVAL_MS,
         tail_overlap_seconds=DEFAULT_TAIL_OVERLAP_SECONDS,
         macos_paste_shortcut=MacPasteShortcut.COMMAND_V,
+        normalize_numbers=True,
     )
 
 
@@ -92,6 +93,7 @@ def test_settings_round_trip_in_portable_config_directory(tmp_path: Path) -> Non
         preview_interval_ms=500,
         tail_overlap_seconds=7,
         macos_paste_shortcut=MacPasteShortcut.CONTROL_V,
+        normalize_numbers=False,
     )
 
     repository.save(settings)
@@ -109,7 +111,22 @@ def test_settings_round_trip_in_portable_config_directory(tmp_path: Path) -> Non
         "preview_interval_ms": 500,
         "selected_model": "qwen3-asr-1.7b-int8",
         "tail_overlap_seconds": 7,
+        "normalize_numbers": False,
     }
+
+
+def test_invalid_number_normalization_setting_is_reported(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(
+        json.dumps({"normalize_numbers": "yes"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="normalize_numbers"):
+        SettingsRepository(config_dir).load()
 
 
 def test_cpu_model_can_be_selected(tmp_path: Path) -> None:
@@ -303,6 +320,31 @@ def test_invalid_preview_interval_is_reported(
     )
 
     with pytest.raises(ValueError, match="preview_interval_ms"):
+        SettingsRepository(config_dir).load()
+
+
+def test_maximum_recording_duration_is_300_seconds(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(
+        json.dumps({"max_recording_seconds": 300}),
+        encoding="utf-8",
+    )
+
+    assert SettingsRepository(config_dir).load().max_recording_seconds == 300
+
+
+def test_recording_duration_above_300_seconds_is_reported(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(
+        json.dumps({"max_recording_seconds": 301}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="max_recording_seconds"):
         SettingsRepository(config_dir).load()
 
 

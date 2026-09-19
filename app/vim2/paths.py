@@ -12,6 +12,10 @@ class AppPaths:
     models_dir: Path
     temp_dir: Path
 
+    @property
+    def hotwords_file(self) -> Path:
+        return self.config_dir / "hotwords.txt"
+
     @classmethod
     def from_root(cls, root: Path) -> AppPaths:
         resolved = root.resolve()

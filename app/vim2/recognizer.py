@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from vim2.audio import AudioArtifact
+from vim2.hotwords import HotwordRepository, HotwordSnapshot
 from vim2.models import MODEL_SPECS, ModelBackend, ModelId, ModelSpec
 from vim2.paths import AppPaths
 
@@ -61,10 +62,16 @@ class QwenRecognizer:
         self._model: Any | None = None
         self._loaded_model: ModelId | None = None
         self._lock = threading.RLock()
+        self._hotword_repository = HotwordRepository(paths.hotwords_file)
+        self._hotwords = HotwordSnapshot(())
 
     @property
     def loaded_model(self) -> ModelId | None:
         return self._loaded_model
+
+    @property
+    def hotwords(self) -> HotwordSnapshot:
+        return self._hotwords
 
     def load(self, model_id: ModelId) -> None:
         with self._lock:
@@ -74,15 +81,22 @@ class QwenRecognizer:
                 raise RuntimeError(
                     "Unload the resident model before loading another model"
                 )
-            spec = MODEL_SPECS[model_id]
-            logger.info("Loading model %s via %s", model_id, spec.backend)
-            self.initialize_runtime(model_id)
-            if spec.backend is ModelBackend.SHERPA_ONNX_CPU:
-                self._load_sherpa_model(spec)
-            else:
-                self._load_qwen_model(spec)
-            self._loaded_model = model_id
-            logger.info("Model loaded: %s", model_id)
+            hotwords = self._hotword_repository.load()
+            self._load_model(model_id, hotwords)
+
+    def _load_model(
+        self, model_id: ModelId, hotwords: HotwordSnapshot
+    ) -> None:
+        spec = MODEL_SPECS[model_id]
+        logger.info("Loading model %s via %s", model_id, spec.backend)
+        self.initialize_runtime(model_id)
+        if spec.backend is ModelBackend.SHERPA_ONNX_CPU:
+            self._load_sherpa_model(spec, hotwords)
+        else:
+            self._load_qwen_model(spec)
+        self._hotwords = hotwords
+        self._loaded_model = model_id
+        logger.info("Model loaded: %s", model_id)
 
     def _load_qwen_model(self, spec: ModelSpec) -> None:
         if not self._torch.cuda.is_available():
@@ -106,9 +120,16 @@ class QwenRecognizer:
             str(model_path), **kwargs
         )
 
-    def _load_sherpa_model(self, spec: ModelSpec) -> None:
+    def _load_sherpa_model(
+        self, spec: ModelSpec, hotwords: HotwordSnapshot
+    ) -> None:
+        self._model = self._create_sherpa_model(spec, hotwords)
+
+    def _create_sherpa_model(
+        self, spec: ModelSpec, hotwords: HotwordSnapshot
+    ) -> Any:
         model_path = self._paths.models_dir / spec.directory_name
-        self._model = self._sherpa.OfflineRecognizer.from_qwen3_asr(
+        return self._sherpa.OfflineRecognizer.from_qwen3_asr(
             conv_frontend=str(model_path / "conv_frontend.onnx"),
             encoder=str(model_path / "encoder.int8.onnx"),
             decoder=str(model_path / "decoder.int8.onnx"),
@@ -117,7 +138,22 @@ class QwenRecognizer:
             provider="cpu",
             max_total_len=1024,
             max_new_tokens=512,
+            hotwords=hotwords.cpu_hotwords,
         )
+
+    def reload_hotwords(self) -> HotwordSnapshot:
+        with self._lock:
+            hotwords = self._hotword_repository.load()
+            if (
+                self._loaded_model is not None
+                and MODEL_SPECS[self._loaded_model].backend
+                is ModelBackend.SHERPA_ONNX_CPU
+            ):
+                self._model = self._create_sherpa_model(
+                    MODEL_SPECS[self._loaded_model], hotwords
+                )
+            self._hotwords = hotwords
+            return hotwords
 
     def initialize_runtime(self, model_id: ModelId = ModelId.FAST) -> None:
         if MODEL_SPECS[model_id].backend is ModelBackend.SHERPA_ONNX_CPU:
@@ -161,9 +197,22 @@ class QwenRecognizer:
             previous = self._loaded_model
             if previous is model_id:
                 return
+            try:
+                hotwords = self._hotword_repository.load()
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                MemoryError,
+            ) as switch_error:
+                raise ModelSwitchError(
+                    f"Failed to load {MODEL_SPECS[model_id].display_name}: "
+                    f"{switch_error}"
+                ) from switch_error
+            previous_hotwords = self._hotwords
             self.unload()
             try:
-                self.load(model_id)
+                self._load_model(model_id, hotwords)
             except (OSError, RuntimeError, ValueError, MemoryError) as switch_error:
                 if previous is None:
                     raise ModelSwitchError(
@@ -171,7 +220,7 @@ class QwenRecognizer:
                         f"{switch_error}"
                     ) from switch_error
                 try:
-                    self.load(previous)
+                    self._load_model(previous, previous_hotwords)
                 except (
                     OSError,
                     RuntimeError,
@@ -235,7 +284,9 @@ class QwenRecognizer:
                 generation_model.generate = cancellable_generate
             try:
                 results = self._model.transcribe(
-                    audio=model_audio, language=None
+                    audio=model_audio,
+                    language=None,
+                    context=self._hotwords.gpu_context,
                 )
             finally:
                 if original_generate is not None:

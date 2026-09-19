@@ -13,7 +13,15 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
 )
-from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QColor,
+    QCursor,
+    QIcon,
+    QPainter,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QGraphicsOpacityEffect,
@@ -184,6 +192,7 @@ class VoiceOverlay(QWidget):
         self._opacity.setOpacity(0.0)
         self._fade_target_visible = False
         self._target_window: object | None = None
+        self._target_screen = None
         self.move(-9999, 0)
         self.show()
 
@@ -219,6 +228,18 @@ class VoiceOverlay(QWidget):
 
     def show_for_window(self, target_window: object | None = None) -> None:
         self._target_window = target_window
+        self._target_screen = None
+        self._show_on_target_screen()
+
+    def show_for_cursor(self, target_window: int) -> None:
+        self._target_window = target_window
+        self._target_screen = self._screen_for_cursor()
+        self._show_on_target_screen()
+
+    def show_on_current_screen(self) -> None:
+        self._show_on_target_screen()
+
+    def _show_on_target_screen(self) -> None:
         self._move_on_screen()
         self._fade.stop()
         self._fade_target_visible = True
@@ -231,7 +252,9 @@ class VoiceOverlay(QWidget):
         self._fade.start()
 
     def _move_on_screen(self) -> None:
-        screen = self._screen_for_window(self._target_window)
+        screen = self._target_screen or self._screen_for_window(
+            self._target_window
+        )
         area = screen.availableGeometry()
         self.move(
             area.x() + (area.width() - self.width()) // 2,
@@ -309,7 +332,18 @@ class VoiceOverlay(QWidget):
         if not hasattr(ctypes, "WinDLL"):
             return
         user32 = ctypes.WinDLL("user32", use_last_error=True)
-        user32.SetWindowPos(
+        set_window_pos = user32.SetWindowPos
+        set_window_pos.argtypes = (
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint,
+        )
+        set_window_pos.restype = ctypes.c_bool
+        set_window_pos(
             int(self.winId()),
             ctypes.c_void_p(-1),
             0,
@@ -324,7 +358,13 @@ class VoiceOverlay(QWidget):
         if target_window and hasattr(ctypes, "WinDLL"):
             rect = wintypes_rect()
             user32 = ctypes.WinDLL("user32", use_last_error=True)
-            if user32.GetWindowRect(target_window, ctypes.byref(rect)):
+            get_window_rect = user32.GetWindowRect
+            get_window_rect.argtypes = (
+                ctypes.c_void_p,
+                ctypes.POINTER(_Rect),
+            )
+            get_window_rect.restype = ctypes.c_bool
+            if get_window_rect(target_window, ctypes.byref(rect)):
                 point = QPoint(
                     (rect.left + rect.right) // 2,
                     (rect.top + rect.bottom) // 2,
@@ -332,6 +372,14 @@ class VoiceOverlay(QWidget):
                 screen = app.screenAt(point)
                 if screen:
                     return screen
+        return app.primaryScreen()
+
+    @staticmethod
+    def _screen_for_cursor():
+        app = QApplication.instance()
+        screen = app.screenAt(QCursor.pos())
+        if screen:
+            return screen
         return app.primaryScreen()
 
     def _pulse(self) -> None:
@@ -412,6 +460,8 @@ class DesktopView:
             self.paste_shortcut_menu.setEnabled(False)
             self.render_macos_paste_shortcut(macos_paste_shortcut)
 
+        self.open_hotwords_action = QAction("打开热词文件")
+        self.reload_hotwords_action = QAction("重新加载热词")
         self.about_action = QAction("关于")
         self.exit_action = QAction("退出")
 
@@ -422,6 +472,9 @@ class DesktopView:
         self.model_menu.addSeparator()
         self.model_menu.addAction(self.fast_model_action)
         self.model_menu.addAction(self.accurate_model_action)
+        self.menu.addSeparator()
+        self.menu.addAction(self.open_hotwords_action)
+        self.menu.addAction(self.reload_hotwords_action)
         self.menu.addSeparator()
         self.menu.addAction(self.about_action)
         self.menu.addAction(self.exit_action)
@@ -469,6 +522,12 @@ class DesktopView:
                     MacPasteShortcut.CONTROL_V
                 )
             )
+        self.open_hotwords_action.triggered.connect(
+            controller.open_hotwords_file
+        )
+        self.reload_hotwords_action.triggered.connect(
+            controller.reload_hotwords
+        )
         self.about_action.triggered.connect(self._show_about)
         self.exit_action.triggered.connect(quit_callback)
         self.tray.activated.connect(self._on_tray_activated)
@@ -498,6 +557,7 @@ class DesktopView:
         self.cpu_model_action.setChecked(model_id is ModelId.CPU)
         self.fast_model_action.setChecked(model_id is ModelId.FAST)
         self.accurate_model_action.setChecked(model_id is ModelId.ACCURATE)
+        self.reload_hotwords_action.setEnabled(state is AppState.READY)
 
         if state is AppState.MODEL_LOADING:
             self.overlay.set_message(
@@ -511,7 +571,7 @@ class DesktopView:
             self.overlay.show_for_window()
         elif state is AppState.FINALIZING:
             self.overlay.set_message("正在识别", self._latest_preview)
-            self.overlay.show_for_window(self._target_window)
+            self.overlay.show_on_current_screen()
         elif state is AppState.READY:
             self.overlay.fade_out()
 
@@ -537,7 +597,7 @@ class DesktopView:
         self._latest_preview = ""
         self._error_hide_timer.stop()
         self.overlay.set_recording(preview="")
-        self.overlay.show_for_window(target_window)
+        self.overlay.show_for_cursor(target_window)
         self._preview_timer.setInterval(preview_interval_ms)
         self._preview_timer.start()
         self._max_timer.start(max_seconds * 1000)
@@ -566,6 +626,14 @@ class DesktopView:
             "VIM2",
             message,
             QSystemTrayIcon.MessageIcon.Warning,
+            5000,
+        )
+
+    def show_info(self, message: str) -> None:
+        self.tray.showMessage(
+            "VIM2",
+            message,
+            QSystemTrayIcon.MessageIcon.Information,
             5000,
         )
 

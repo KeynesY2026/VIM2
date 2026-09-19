@@ -5,3 +5,5 @@ __pycache__/
 .pytest_cache/
 temp/
 *benchmark-smoke*.json
+runtime/
+config/hotwords.txt

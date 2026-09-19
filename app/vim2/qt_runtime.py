@@ -4,8 +4,10 @@ import logging
 import os
 import sys
 from collections.abc import Callable
+from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from vim2.audio import AudioRecorder
@@ -17,8 +19,10 @@ from vim2.config import (
 )
 from vim2.controller import AppController
 from vim2.hotkey import HotkeyDispatcher, parse_hotkey
+from vim2.hotwords import HotwordRepository
 from vim2.paths import AppPaths
 from vim2.platform_services import PlatformServices, create_platform_services
+from vim2.postprocessing import create_text_postprocessor
 from vim2.recognizer import QwenRecognizer
 from vim2.session import VoiceSession
 from vim2.state import AppState, StateMachine
@@ -80,6 +84,14 @@ class QtTaskRunner:
 class _HotkeyBridge(QObject):
     toggle_requested = Signal()
     cancel_requested = Signal()
+
+
+def _open_local_file(path: Path) -> bool:
+    return QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+
+def _open_hotwords_file(path: Path) -> bool:
+    return _open_local_file(HotwordRepository(path).ensure_file())
 
 
 def _restart_process(paths: AppPaths) -> None:
@@ -173,6 +185,9 @@ def run_qt_application(
         recognizer,
         paster,
         tail_overlap_seconds=settings.tail_overlap_seconds,
+        text_postprocessor=create_text_postprocessor(
+            normalize_numbers=settings.normalize_numbers
+        ),
     )
     view = DesktopView(
         supported_models=services.supported_models,
@@ -194,6 +209,7 @@ def run_qt_application(
         foreground_window=services.capture_target,
         restart_application=lambda: app.exit(RESTART_EXIT_CODE),
         macos_paste_shortcut_selection=macos_paste_shortcut_selection,
+        open_hotwords_file=lambda: _open_hotwords_file(paths.hotwords_file),
     )
     bridge.toggle_requested.connect(controller.toggle_recording)
     bridge.cancel_requested.connect(controller.cancel)

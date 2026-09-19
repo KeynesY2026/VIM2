@@ -116,9 +116,13 @@ class FakeSherpaFactory:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
         self.recognizers: list[FakeSherpaRecognizer] = []
+        self.fail_next = False
 
     def from_qwen3_asr(self, **kwargs) -> FakeSherpaRecognizer:
         self.calls.append(kwargs)
+        if self.fail_next:
+            self.fail_next = False
+            raise RuntimeError("rebuild failed")
         recognizer = FakeSherpaRecognizer()
         self.recognizers.append(recognizer)
         return recognizer
@@ -204,6 +208,7 @@ def test_cpu_model_uses_sherpa_onnx_without_cuda(tmp_path: Path) -> None:
             "provider": "cpu",
             "max_total_len": 1024,
             "max_new_tokens": 512,
+            "hotwords": "",
         }
     ]
     assert recognizer.loaded_model is ModelId.CPU
@@ -258,6 +263,92 @@ def test_transcribe_uses_loaded_model_and_auto_language(tmp_path: Path) -> None:
     assert audio is samples
     assert sample_rate == 16_000
     assert loader.models[0].calls[0]["language"] is None
+    assert loader.models[0].calls[0]["context"] == ""
+
+
+def test_gpu_transcribe_uses_newline_hotword_context(tmp_path: Path) -> None:
+    hotwords_path = tmp_path / "config" / "hotwords.txt"
+    hotwords_path.parent.mkdir()
+    hotwords_path.write_text("Visual Studio Code\nVIM2\n", encoding="utf-8")
+    recognizer, loader, _ = _recognizer(tmp_path)
+    recognizer.load(ModelId.FAST)
+
+    recognizer.transcribe(
+        AudioArtifact(np.zeros(1, dtype=np.float32), 16_000), ModelId.FAST
+    )
+
+    assert loader.models[0].calls[0]["context"] == "Visual Studio Code\nVIM2"
+
+
+def test_cpu_model_uses_comma_separated_hotwords(tmp_path: Path) -> None:
+    hotwords_path = tmp_path / "config" / "hotwords.txt"
+    hotwords_path.parent.mkdir()
+    hotwords_path.write_text("Visual Studio Code\nVIM2\n", encoding="utf-8")
+    sherpa = FakeSherpaModule()
+    recognizer = QwenRecognizer(
+        AppPaths.from_root(tmp_path), sherpa_module=sherpa
+    )
+
+    recognizer.load(ModelId.CPU)
+
+    assert sherpa.OfflineRecognizer.calls[0]["hotwords"] == (
+        "Visual Studio Code,VIM2"
+    )
+
+
+def test_reload_updates_gpu_context_without_reloading_weights(
+    tmp_path: Path,
+) -> None:
+    recognizer, loader, _ = _recognizer(tmp_path)
+    recognizer.load(ModelId.FAST)
+    hotwords_path = tmp_path / "config" / "hotwords.txt"
+    hotwords_path.write_text("Qwen\n", encoding="utf-8")
+
+    snapshot = recognizer.reload_hotwords()
+    recognizer.transcribe(
+        AudioArtifact(np.zeros(1, dtype=np.float32), 16_000), ModelId.FAST
+    )
+
+    assert snapshot.entries == ("Qwen",)
+    assert len(loader.models) == 1
+    assert loader.models[0].calls[0]["context"] == "Qwen"
+
+
+def test_reload_rebuilds_loaded_cpu_recognizer(tmp_path: Path) -> None:
+    sherpa = FakeSherpaModule()
+    recognizer = QwenRecognizer(
+        AppPaths.from_root(tmp_path), sherpa_module=sherpa
+    )
+    recognizer.load(ModelId.CPU)
+    hotwords_path = tmp_path / "config" / "hotwords.txt"
+    hotwords_path.write_text("Qwen\nVIM2\n", encoding="utf-8")
+
+    recognizer.reload_hotwords()
+
+    assert len(sherpa.OfflineRecognizer.recognizers) == 2
+    assert sherpa.OfflineRecognizer.calls[-1]["hotwords"] == "Qwen,VIM2"
+
+
+def test_failed_cpu_reload_preserves_previous_model_and_snapshot(
+    tmp_path: Path,
+) -> None:
+    hotwords_path = tmp_path / "config" / "hotwords.txt"
+    hotwords_path.parent.mkdir()
+    hotwords_path.write_text("previous\n", encoding="utf-8")
+    sherpa = FakeSherpaModule()
+    recognizer = QwenRecognizer(
+        AppPaths.from_root(tmp_path), sherpa_module=sherpa
+    )
+    recognizer.load(ModelId.CPU)
+    previous_model = recognizer._model
+    hotwords_path.write_text("replacement\n", encoding="utf-8")
+    sherpa.OfflineRecognizer.fail_next = True
+
+    with pytest.raises(RuntimeError, match="rebuild failed"):
+        recognizer.reload_hotwords()
+
+    assert recognizer._model is previous_model
+    assert recognizer.hotwords.entries == ("previous",)
 
 
 def test_transcribe_skips_model_when_already_cancelled(tmp_path: Path) -> None:
@@ -304,7 +395,7 @@ def test_transcribe_accepts_existing_audio_path_for_benchmarks(
 
     assert result == "recognized"
     assert loader.models[0].calls == [
-        {"audio": str(audio_path), "language": None}
+        {"audio": str(audio_path), "language": None, "context": ""}
     ]
 
 
@@ -333,6 +424,27 @@ def test_failed_switch_restores_previous_model(tmp_path: Path) -> None:
         recognizer.switch(ModelId.ACCURATE)
 
     assert recognizer.loaded_model is ModelId.FAST
+
+
+def test_invalid_hotword_refresh_does_not_destroy_model_on_gpu_switch(
+    tmp_path: Path,
+) -> None:
+    hotwords_path = tmp_path / "config" / "hotwords.txt"
+    hotwords_path.parent.mkdir()
+    hotwords_path.write_text("previous\n", encoding="utf-8")
+    recognizer, _, _ = _recognizer(tmp_path)
+    recognizer.load(ModelId.FAST)
+    previous_model = recognizer._model
+    hotwords_path.write_text("invalid,comma\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="contains an ASCII comma"):
+        recognizer.reload_hotwords()
+    with pytest.raises(ModelSwitchError, match="contains an ASCII comma"):
+        recognizer.switch(ModelId.ACCURATE)
+
+    assert recognizer.loaded_model is ModelId.FAST
+    assert recognizer._model is previous_model
+    assert recognizer.hotwords.entries == ("previous",)
 
 
 def test_transcribe_rejects_model_other_than_resident_model(

@@ -6,11 +6,12 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
+import vim2.ui as ui_module
 from vim2.config import MacPasteShortcut
 from vim2.models import ModelId
 from vim2.state import AppState
@@ -109,6 +110,95 @@ def test_show_for_window_reshows_and_raises_non_win32_overlay_without_focus() ->
     assert overlay.testAttribute(
         Qt.WidgetAttribute.WA_TransparentForMouseEvents
     )
+
+
+def test_overlay_uses_cursor_monitor_instead_of_target_window(
+    monkeypatch,
+) -> None:
+    _app()
+    overlay = VoiceOverlay()
+
+    class FakeScreen:
+        def __init__(self, area: QRect) -> None:
+            self._area = area
+
+        def availableGeometry(self) -> QRect:
+            return self._area
+
+    left_screen = FakeScreen(QRect(0, 0, 1_000, 800))
+    right_screen = FakeScreen(QRect(1_000, 0, 1_000, 800))
+    cursor_position = [200, 300]
+
+    class FakeApplication:
+        @staticmethod
+        def instance():
+            return FakeApplication()
+
+        def screenAt(self, point):
+            return left_screen if point.x() < 1_000 else right_screen
+
+        def primaryScreen(self):
+            return right_screen
+
+    class FakeCursor:
+        @staticmethod
+        def pos():
+            return ui_module.QPoint(*cursor_position)
+
+    class FakeFunction:
+        def __init__(self, callback) -> None:
+            self._callback = callback
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *args):
+            return self._callback(*args)
+
+    class FakeUser32:
+        def __init__(self) -> None:
+            self.GetWindowRect = FakeFunction(self._get_window_rect)
+            self.GetCursorPos = FakeFunction(self._get_cursor_pos)
+            self.SetWindowPos = FakeFunction(lambda *args: 1)
+
+        @staticmethod
+        def _get_window_rect(window, rect_pointer):
+            del window
+            rect = rect_pointer._obj
+            rect.left = 1_200
+            rect.right = 1_800
+            rect.top = 100
+            rect.bottom = 700
+            return 1
+
+        @staticmethod
+        def _get_cursor_pos(point_pointer):
+            point = point_pointer._obj
+            point.x = 1_500
+            point.y = 300
+            return 1
+
+    monkeypatch.setattr(ui_module, "QApplication", FakeApplication)
+    monkeypatch.setattr(ui_module, "QCursor", FakeCursor, raising=False)
+    monkeypatch.setattr(
+        ctypes,
+        "WinDLL",
+        lambda *args, **kwargs: FakeUser32(),
+        raising=False,
+    )
+
+    overlay.show_for_cursor(123)
+
+    assert overlay.x() == 445
+    assert overlay.y() == 708
+
+    cursor_position[:] = [1_500, 300]
+    overlay.set_recording(preview="preview text " * 20)
+    resized_x = overlay.x()
+    overlay.set_message("正在识别", overlay.current_preview)
+    overlay.show_on_current_screen()
+
+    assert 0 <= resized_x < 1_000
+    assert overlay.x() == resized_x
 
 
 def test_overlay_paints_v1_translucent_background() -> None:
@@ -302,6 +392,23 @@ def test_tray_menu_supports_cpu_model() -> None:
     assert view.cpu_model_action.isChecked()
     assert not view.fast_model_action.isChecked()
     assert not view.accurate_model_action.isChecked()
+
+
+def test_tray_menu_exposes_hotword_file_and_ready_only_reload() -> None:
+    _app()
+    view = DesktopView()
+
+    view.render_state(AppState.READY, model_id=ModelId.FAST)
+
+    assert view.open_hotwords_action.text() == "打开热词文件"
+    assert view.reload_hotwords_action.text() == "重新加载热词"
+    assert view.open_hotwords_action.isEnabled()
+    assert view.reload_hotwords_action.isEnabled()
+
+    view.render_state(AppState.RECORDING, model_id=ModelId.FAST)
+
+    assert view.open_hotwords_action.isEnabled()
+    assert not view.reload_hotwords_action.isEnabled()
 
 
 def test_live_preview_timer_uses_configured_interval() -> None:

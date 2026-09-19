@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 
 SENTENCE_ENDINGS = frozenset("。！？.!?")
+_CJK_NAME_PARTS = ("HIRAGANA", "KATAKANA", "BOPOMOFO")
+_COMMON_LETTER_PREFIXES = {
+    "CIRCLED",
+    "MATHEMATICAL",
+    "MODIFIER",
+    "PARENTHESIZED",
+    "SUBSCRIPT",
+    "SUPERSCRIPT",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +80,49 @@ def merge_stable_tail(
         return None
     _, remainder = tail.split(checkpoint.anchor, maxsplit=1)
     return f"{checkpoint.prefix}{remainder}".strip()
+
+
+def format_mixed_language_spacing(text: str) -> str:
+    formatted: list[str] = []
+    active_system: str | None = None
+    for character in text:
+        system = _writing_system(character)
+        if system is not None:
+            if active_system is not None and system != active_system:
+                formatted.append(" ")
+            formatted.append(character)
+            active_system = system
+        elif (
+            active_system is not None
+            and unicodedata.category(character).startswith("M")
+        ):
+            formatted.append(character)
+        else:
+            formatted.append(character)
+            active_system = None
+    return "".join(formatted)
+
+
+def _writing_system(character: str) -> str | None:
+    name = unicodedata.name(character, "")
+    if (
+        name.startswith("CJK UNIFIED IDEOGRAPH")
+        or name.startswith("CJK COMPATIBILITY IDEOGRAPH")
+        or character == "\u3007"
+    ):
+        return "CJK"
+    if not unicodedata.category(character).startswith("L"):
+        return None
+    if any(part in name for part in _CJK_NAME_PARTS):
+        return "CJK"
+    parts = name.split()
+    if not parts or parts[0] in _COMMON_LETTER_PREFIXES:
+        return None
+    if parts[0] in {"FULLWIDTH", "HALFWIDTH"} and len(parts) > 1:
+        return parts[1]
+    if parts[0] in {"OLD", "LINEAR"} and len(parts) > 1:
+        return " ".join(parts[:2])
+    return parts[0]
 
 
 def _complete_prefix(text: str) -> str:
