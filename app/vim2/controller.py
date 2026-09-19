@@ -206,10 +206,8 @@ class AppController:
         elif self._stop_requested:
             self._stop_requested = False
             self._finalize()
-        elif self._preview_pending:
-            self._preview_pending = False
-            self.request_preview()
         else:
+            self._preview_pending = False
             self._render()
 
     def _finalize(self) -> None:

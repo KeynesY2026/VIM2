@@ -108,7 +108,10 @@ class FakeRecorder:
         self.seal_calls += 1
         self.started = False
 
-    def snapshot(self) -> AudioArtifact:
+    def snapshot(
+        self, max_seconds: int | None = None
+    ) -> AudioArtifact:
+        del max_seconds
         return AudioArtifact(np.zeros(8_000, dtype=np.float32), 16_000)
 
     def cancel(self) -> None:
@@ -439,7 +442,7 @@ def test_stop_requested_before_preview_worker_starts_is_serialized(
     assert controller.state is AppState.READY
 
 
-def test_busy_preview_keeps_only_one_latest_follow_up(tmp_path: Path) -> None:
+def test_busy_preview_waits_for_next_timer_tick(tmp_path: Path) -> None:
     controller, recognizer, recorder, paster, view, repository = _controller(
         tmp_path, ["first", "latest"]
     )
@@ -467,8 +470,10 @@ def test_busy_preview_keeps_only_one_latest_follow_up(tmp_path: Path) -> None:
     assert len(runner.tasks) == 1
     runner.complete_next()
     assert view.previews == ["first"]
-    assert len(runner.tasks) == 1
+    assert runner.tasks == []
 
+    controller.request_preview()
+    assert len(runner.tasks) == 1
     runner.complete_next()
 
     assert recognizer.transcribe_calls == 2
