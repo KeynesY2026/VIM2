@@ -4,11 +4,12 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication
 
 import vim2.qt_runtime as qt_runtime
 from vim2.models import ModelId
-from vim2.qt_runtime import QtTaskRunner
+from vim2.qt_runtime import HotwordEditorProcess, QtTaskRunner
 
 
 def _run_until_callback(submit) -> tuple[list[object], list[Exception]]:
@@ -111,39 +112,53 @@ def test_model_runtime_initializes_on_ui_thread_after_tray_is_visible() -> None:
     ]
 
 
-def test_open_local_file_uses_qt_file_url(
-    tmp_path: Path, monkeypatch
+class FakeProcess:
+    def __init__(self) -> None:
+        self.exit_code: int | None = None
+
+    def poll(self) -> int | None:
+        return self.exit_code
+
+
+def test_hotword_editor_checks_modified_time_only_after_process_closes(
+    tmp_path: Path,
 ) -> None:
-    opened = []
-    monkeypatch.setattr(
-        qt_runtime.QDesktopServices,
-        "openUrl",
-        lambda url: opened.append(url) or True,
-    )
-    path = tmp_path / "配置 空格" / "hotwords.txt"
-
-    result = qt_runtime._open_local_file(path)
-
-    assert result is True
-    assert opened[0].isLocalFile()
-    assert Path(opened[0].toLocalFile()) == path
-
-
-def test_open_hotwords_file_creates_missing_template(
-    tmp_path: Path, monkeypatch
-) -> None:
-    opened = []
-    monkeypatch.setattr(
-        qt_runtime.QDesktopServices,
-        "openUrl",
-        lambda url: opened.append(url) or True,
-    )
+    _app = QApplication.instance() or QApplication([])
     path = tmp_path / "config" / "hotwords.txt"
-
-    result = qt_runtime._open_hotwords_file(path)
-
-    assert result is True
-    assert path.read_text(encoding="utf-8") == (
-        "# One hotword or phrase per line. Lines beginning with # are ignored.\n"
+    process = FakeProcess()
+    commands: list[list[str]] = []
+    editor = HotwordEditorProcess(
+        path,
+        launch=lambda command: commands.append(command) or process,
     )
-    assert Path(opened[0].toLocalFile()) == path
+    spy = QSignalSpy(editor.changed)
+
+    assert editor.open()
+    assert path.read_text(encoding="utf-8").startswith("#")
+    assert commands == [["notepad.exe", str(path.resolve())]]
+
+    path.write_text("VIM2\n", encoding="utf-8")
+    editor.check_process()
+
+    assert spy.count() == 0
+
+    process.exit_code = 0
+    editor.check_process()
+
+    assert spy.count() == 1
+
+
+def test_hotword_editor_does_not_reload_after_unchanged_process_closes(
+    tmp_path: Path,
+) -> None:
+    _app = QApplication.instance() or QApplication([])
+    path = tmp_path / "config" / "hotwords.txt"
+    process = FakeProcess()
+    editor = HotwordEditorProcess(path, launch=lambda command: process)
+    spy = QSignalSpy(editor.changed)
+
+    assert editor.open()
+    process.exit_code = 0
+    editor.check_process()
+
+    assert spy.count() == 0

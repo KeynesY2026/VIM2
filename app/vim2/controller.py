@@ -96,6 +96,7 @@ class AppController:
         self._stop_requested = False
         self._cancel_requested = False
         self._operation_busy = False
+        self._hotword_reload_pending = False
 
     @property
     def state(self) -> AppState:
@@ -284,26 +285,56 @@ class AppController:
     def reload_hotwords(self) -> None:
         if self.state is not AppState.READY or self._operation_busy:
             return
+        self._submit_hotword_reload(automatic=False)
+
+    def hotwords_file_changed(self) -> None:
+        self._hotword_reload_pending = True
+        self._reload_pending_hotwords()
+
+    def _reload_pending_hotwords(self) -> None:
+        if (
+            not self._hotword_reload_pending
+            or self.state is not AppState.READY
+            or self._operation_busy
+        ):
+            return
+        self._hotword_reload_pending = False
+        self._submit_hotword_reload(automatic=True)
+
+    def _submit_hotword_reload(self, *, automatic: bool) -> None:
         self._operation_busy = True
         self._runner.submit(
             self._recognizer.reload_hotwords,
-            self._on_hotwords_reloaded,
-            self._on_hotword_reload_error,
+            lambda result: self._on_hotwords_reloaded(
+                result, automatic=automatic
+            ),
+            lambda error: self._on_hotword_reload_error(
+                error, automatic=automatic
+            ),
         )
 
-    def _on_hotwords_reloaded(self, result: object) -> None:
+    def _on_hotwords_reloaded(
+        self, result: object, *, automatic: bool = False
+    ) -> None:
         self._operation_busy = False
         if not isinstance(result, HotwordSnapshot):
             self._view.show_error("重新加载热词失败：返回了无效结果。")
+            self._reload_pending_hotwords()
             return
-        self._view.show_info(f"已重新加载 {len(result.entries)} 个热词。")
+        action = "自动加载" if automatic else "重新加载"
+        self._view.show_info(f"已{action} {len(result.entries)} 个热词。")
+        self._reload_pending_hotwords()
 
-    def _on_hotword_reload_error(self, error: Exception) -> None:
+    def _on_hotword_reload_error(
+        self, error: Exception, *, automatic: bool = False
+    ) -> None:
+        del automatic
         self._operation_busy = False
         self._view.show_error(
             "重新加载热词失败，继续使用上次成功的词表："
             f"{error}"
         )
+        self._reload_pending_hotwords()
 
     def open_hotwords_file(self) -> None:
         try:
@@ -362,6 +393,7 @@ class AppController:
 
     def shutdown(self) -> None:
         self._preview_pending = False
+        self._hotword_reload_pending = False
         if self._preview_cancel_event is not None:
             self._preview_cancel_event.set()
         self._session.shutdown()
@@ -372,3 +404,4 @@ class AppController:
 
     def _render(self) -> None:
         self._view.render_state(self.state, self.selected_model)
+        self._reload_pending_hotwords()

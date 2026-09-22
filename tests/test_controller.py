@@ -295,6 +295,24 @@ def test_hotword_reload_is_ignored_during_recording(tmp_path: Path) -> None:
     assert recognizer.reload_calls == 0
 
 
+def test_hotword_file_change_reloads_when_recording_returns_to_ready(
+    tmp_path: Path,
+) -> None:
+    controller, recognizer, recorder, _, view, _ = _controller(tmp_path, [])
+    controller.start()
+    controller.toggle_recording()
+
+    controller.hotwords_file_changed()
+
+    assert recognizer.reload_calls == 0
+
+    controller.cancel()
+
+    assert not recorder.started
+    assert recognizer.reload_calls == 1
+    assert view.infos == ["已自动加载 2 个热词。"]
+
+
 def test_failed_hotword_reload_reports_previous_snapshot_is_retained(
     tmp_path: Path,
 ) -> None:

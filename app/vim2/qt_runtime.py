@@ -3,12 +3,20 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
+import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Protocol
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import (
+    QObject,
+    QRunnable,
+    QThreadPool,
+    QTimer,
+    Signal,
+    Slot,
+)
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from vim2.application import SingleInstanceGuard
@@ -82,6 +90,71 @@ class QtTaskRunner:
         self._pool.waitForDone()
 
 
+class ProcessHandle(Protocol):
+    def poll(self) -> int | None: ...
+
+
+class HotwordEditorProcess(QObject):
+    changed = Signal()
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        launch: Callable[[list[str]], ProcessHandle] = subprocess.Popen,
+    ) -> None:
+        super().__init__()
+        self._path = path.resolve()
+        self._launch = launch
+        self._process: ProcessHandle | None = None
+        self._opened_modified_time_ns: int | None = None
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(250)
+        self._poll_timer.timeout.connect(self.check_process)
+
+    def open(self) -> bool:
+        if self._process is not None:
+            if self._process.poll() is None:
+                return True
+            self._finish_process()
+        HotwordRepository(self._path).ensure_file()
+        self._opened_modified_time_ns = self._file_modified_time_ns()
+        try:
+            self._process = self._launch(
+                ["notepad.exe", str(self._path)]
+            )
+        except OSError:
+            logging.getLogger(__name__).exception(
+                "Failed to open hotword editor"
+            )
+            self._process = None
+            return False
+        self._poll_timer.start()
+        return True
+
+    def check_process(self) -> None:
+        if self._process is None or self._process.poll() is None:
+            return
+        self._finish_process()
+
+    def _finish_process(self) -> None:
+        self._process = None
+        self._poll_timer.stop()
+        modified_time_ns = self._file_modified_time_ns()
+        if (
+            modified_time_ns is not None
+            and modified_time_ns != self._opened_modified_time_ns
+        ):
+            self.changed.emit()
+        self._opened_modified_time_ns = None
+
+    def _file_modified_time_ns(self) -> int | None:
+        try:
+            return self._path.stat().st_mtime_ns
+        except FileNotFoundError:
+            return None
+
+
 class _HotkeyBridge(QObject):
     toggle_requested = Signal()
     cancel_requested = Signal()
@@ -96,14 +169,6 @@ def _foreground_window() -> int:
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     user32.GetForegroundWindow.restype = ctypes.c_void_p
     return int(user32.GetForegroundWindow() or 0)
-
-
-def _open_local_file(path: Path) -> bool:
-    return QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
-
-
-def _open_hotwords_file(path: Path) -> bool:
-    return _open_local_file(HotwordRepository(path).ensure_file())
 
 
 def _restart_process(paths: AppPaths) -> None:
@@ -179,6 +244,7 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
     )
     view = DesktopView()
     runner = QtTaskRunner()
+    hotword_editor = HotwordEditorProcess(paths.hotwords_file)
     controller = AppController(
         machine=machine,
         settings=settings,
@@ -189,8 +255,9 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
         task_runner=runner,
         foreground_window=_foreground_window,
         restart_application=lambda: app.exit(RESTART_EXIT_CODE),
-        open_hotwords_file=lambda: _open_hotwords_file(paths.hotwords_file),
+        open_hotwords_file=hotword_editor.open,
     )
+    hotword_editor.changed.connect(controller.hotwords_file_changed)
     bridge.toggle_requested.connect(controller.toggle_recording)
     bridge.cancel_requested.connect(controller.cancel)
     view.bind(controller, app.quit)
