@@ -653,9 +653,18 @@ class PyObjCMacNativeApi:
                     self._quartz.kCGEventSourceUserData,
                     VIM2_INPUT_MARKER,
                 )
+            # CGEventCreateKeyboardEvent already supplies the device-side bit
+            # and the synthetic base flags. Replacing that value with only the
+            # generic mask leaves a flagsChanged consumer holding no modifier,
+            # so the following V is delivered as the character v. Keep the
+            # created baseline, ensure the generic bit, and copy those full
+            # down flags onto V. The modifier-up event already has the release
+            # baseline and must not be overwritten.
+            modifier_down_flags = int(
+                self._quartz.CGEventGetFlags(modifier_down)
+            ) | int(modifier_flag)
             for event in (modifier_down, v_down, v_up):
-                self._quartz.CGEventSetFlags(event, modifier_flag)
-            self._quartz.CGEventSetFlags(modifier_up, 0)
+                self._quartz.CGEventSetFlags(event, modifier_down_flags)
         except Exception:
             return False
 

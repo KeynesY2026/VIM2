@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import subprocess
 import sys
 import tempfile
@@ -351,6 +352,10 @@ class _PostingQuartz:
         )
 
     @staticmethod
+    def CGEventGetFlags(event: SimpleNamespace) -> int:
+        return int(event.flags)
+
+    @staticmethod
     def CGEventSetIntegerValueField(
         event: SimpleNamespace, field: int, marker: int
     ) -> None:
@@ -358,7 +363,7 @@ class _PostingQuartz:
 
     @staticmethod
     def CGEventSetFlags(event: SimpleNamespace, flags: int) -> None:
-        event.flags = flags
+        event.flags = int(flags)
 
     def CGEventPost(self, event_tap: int, event: SimpleNamespace) -> None:
         del event_tap
@@ -895,6 +900,371 @@ class MacHotkeyCleanupTests(unittest.TestCase):
         gate.set()
         listener.stop()
         self.assertFalse(listener.is_running)
+
+
+# Darwin NX event types and left-modifier masks. The consumer below uses these
+# as an external client's fixed rules; it does not replay VIM2's flag copying.
+_NX_KEY_DOWN = 10
+_NX_KEY_UP = 11
+_NX_FLAGS_CHANGED = 12
+_LEFT_COMMAND_KEYCODE = 55
+_LEFT_CONTROL_KEYCODE = 59
+_V_KEYCODE = 9
+_GENERIC_COMMAND = 0x00100000
+_GENERIC_CONTROL = 0x00040000
+_LEFT_COMMAND_DEVICE = 0x00000008
+_LEFT_CONTROL_DEVICE = 0x00000001
+_CREATE_BASE_FLAGS = 0x20000000
+
+
+def _consumed_event(
+    event_type: int, keycode: int, flags: int
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        event_type=event_type,
+        keycode=keycode,
+        flags=flags,
+    )
+
+
+class _WindowsAppPasteConsumer:
+    """Microsoft Windows App chord model, distinct from local TextEdit.
+
+    TextEdit pastes when the V keyDown itself carries a generic modifier
+    flag. Windows App does not: it arms paste only after a left-modifier
+    flagsChanged event that contains both that side's device bit and the
+    generic mask. Any other V keyDown is the character "v", even if V's own
+    flags look like a Cocoa paste chord.
+    """
+
+    _COMPLETE_LEFT_MODIFIER = {
+        _LEFT_COMMAND_KEYCODE: _GENERIC_COMMAND | _LEFT_COMMAND_DEVICE,
+        _LEFT_CONTROL_KEYCODE: _GENERIC_CONTROL | _LEFT_CONTROL_DEVICE,
+    }
+
+    def interpret(self, events: object) -> str:
+        armed = False
+        outputs: list[str] = []
+        for event in events:
+            event_type = int(event.event_type)
+            keycode = int(event.keycode)
+            flags = int(event.flags)
+            required = self._COMPLETE_LEFT_MODIFIER.get(keycode)
+            if event_type == _NX_FLAGS_CHANGED and required is not None:
+                armed = flags & required == required
+            elif event_type == _NX_KEY_DOWN and keycode == _V_KEYCODE:
+                outputs.append("PASTE" if armed else "v")
+        return "".join(outputs)
+
+
+class _HardwareBaselineQuartz:
+    """CGEventCreateKeyboardEvent baselines confirmed by the no-post dry-run.
+
+    Modifier creation is flagsChanged and already includes the side bit.
+    This double does not implement VIM2's desired output flags.
+    """
+
+    kCGEventSourceUserData = 42
+    kCGHIDEventTap = 0
+    kCGEventFlagMaskCommand = _GENERIC_COMMAND
+    kCGEventFlagMaskControl = _GENERIC_CONTROL
+
+    def __init__(self) -> None:
+        self.posted: list[SimpleNamespace] = []
+
+    @staticmethod
+    def CGEventCreateKeyboardEvent(
+        source: object, keycode: int, is_down: bool
+    ) -> SimpleNamespace:
+        del source
+        baselines = {
+            (_LEFT_COMMAND_KEYCODE, True): (
+                _NX_FLAGS_CHANGED,
+                _CREATE_BASE_FLAGS | _GENERIC_COMMAND | _LEFT_COMMAND_DEVICE,
+            ),
+            (_LEFT_COMMAND_KEYCODE, False): (
+                _NX_FLAGS_CHANGED,
+                _CREATE_BASE_FLAGS,
+            ),
+            (_LEFT_CONTROL_KEYCODE, True): (
+                _NX_FLAGS_CHANGED,
+                _CREATE_BASE_FLAGS | _GENERIC_CONTROL | _LEFT_CONTROL_DEVICE,
+            ),
+            (_LEFT_CONTROL_KEYCODE, False): (
+                _NX_FLAGS_CHANGED,
+                _CREATE_BASE_FLAGS,
+            ),
+            (_V_KEYCODE, True): (_NX_KEY_DOWN, _CREATE_BASE_FLAGS),
+            (_V_KEYCODE, False): (_NX_KEY_UP, _CREATE_BASE_FLAGS),
+        }
+        event_type, flags = baselines[(int(keycode), bool(is_down))]
+        return SimpleNamespace(
+            event_type=event_type,
+            keycode=int(keycode),
+            is_down=bool(is_down),
+            flags=flags,
+            fields={},
+        )
+
+    @staticmethod
+    def CGEventGetFlags(event: SimpleNamespace) -> int:
+        return int(event.flags)
+
+    @staticmethod
+    def CGEventSetFlags(event: SimpleNamespace, flags: int) -> None:
+        event.flags = int(flags)
+
+    @staticmethod
+    def CGEventSetIntegerValueField(
+        event: SimpleNamespace, field: int, value: int
+    ) -> None:
+        event.fields[int(field)] = value
+
+    def CGEventPost(self, event_tap: int, event: SimpleNamespace) -> None:
+        del event_tap
+        self.posted.append(
+            _consumed_event(
+                int(event.event_type),
+                int(event.keycode),
+                int(event.flags),
+            )
+        )
+
+
+class WindowsAppPasteConsumerTests(unittest.TestCase):
+    def test_complete_left_flags_changed_pastes_stripped_chord_is_bare_v(
+        self,
+    ) -> None:
+        consumer = _WindowsAppPasteConsumer()
+        # V flags are intentionally empty: paste must come from flagsChanged.
+        complete_command = (
+            _consumed_event(_NX_FLAGS_CHANGED, _LEFT_COMMAND_KEYCODE, 0x20100008),
+            _consumed_event(_NX_KEY_DOWN, _V_KEYCODE, 0),
+            _consumed_event(_NX_KEY_UP, _V_KEYCODE, 0),
+            _consumed_event(
+                _NX_FLAGS_CHANGED,
+                _LEFT_COMMAND_KEYCODE,
+                _CREATE_BASE_FLAGS,
+            ),
+        )
+        complete_control = (
+            _consumed_event(_NX_FLAGS_CHANGED, _LEFT_CONTROL_KEYCODE, 0x20040001),
+            _consumed_event(_NX_KEY_DOWN, _V_KEYCODE, 0),
+            _consumed_event(_NX_KEY_UP, _V_KEYCODE, 0),
+            _consumed_event(
+                _NX_FLAGS_CHANGED,
+                _LEFT_CONTROL_KEYCODE,
+                _CREATE_BASE_FLAGS,
+            ),
+        )
+        stripped_command = (
+            _consumed_event(
+                _NX_FLAGS_CHANGED, _LEFT_COMMAND_KEYCODE, _GENERIC_COMMAND
+            ),
+            _consumed_event(_NX_KEY_DOWN, _V_KEYCODE, _GENERIC_COMMAND),
+            _consumed_event(_NX_KEY_UP, _V_KEYCODE, _GENERIC_COMMAND),
+            _consumed_event(_NX_FLAGS_CHANGED, _LEFT_COMMAND_KEYCODE, 0),
+        )
+        textedit_style_v = (
+            _consumed_event(_NX_KEY_DOWN, _V_KEYCODE, 0x20100008),
+        )
+        key_down_modifier = (
+            _consumed_event(_NX_KEY_DOWN, _LEFT_COMMAND_KEYCODE, 0x20100008),
+            _consumed_event(_NX_KEY_DOWN, _V_KEYCODE, 0x20100008),
+        )
+        device_bit_without_generic = (
+            _consumed_event(
+                _NX_FLAGS_CHANGED,
+                _LEFT_COMMAND_KEYCODE,
+                _LEFT_COMMAND_DEVICE,
+            ),
+            _consumed_event(_NX_KEY_DOWN, _V_KEYCODE, 0),
+        )
+
+        with self.subTest("golden left command flagsChanged"):
+            self.assertEqual(consumer.interpret(complete_command), "PASTE")
+        with self.subTest("golden left control flagsChanged"):
+            self.assertEqual(consumer.interpret(complete_control), "PASTE")
+        with self.subTest("generic-only flagsChanged is bare v"):
+            self.assertEqual(consumer.interpret(stripped_command), "v")
+        with self.subTest("V flags alone are not Windows App paste"):
+            self.assertEqual(consumer.interpret(textedit_style_v), "v")
+        with self.subTest("modifier keyDown is not flagsChanged"):
+            self.assertEqual(consumer.interpret(key_down_modifier), "v")
+        with self.subTest("device bit without generic mask is bare v"):
+            self.assertEqual(consumer.interpret(device_bit_without_generic), "v")
+
+        with self.subTest("send_command_v"):
+            self.assertEqual(self._interpret_sent("send_command_v"), "PASTE")
+        with self.subTest("send_control_v"):
+            self.assertEqual(self._interpret_sent("send_control_v"), "PASTE")
+
+    def _interpret_sent(self, method_name: str) -> str:
+        quartz = _HardwareBaselineQuartz()
+        api = _native_api(_native_modules(quartz=quartz))
+        self.assertTrue(getattr(api, method_name)())
+        return _WindowsAppPasteConsumer().interpret(quartz.posted)
+
+
+class _NonPostingQuartz:
+    """Forwards Quartz construction and readback, but never CGEventPost."""
+
+    def __init__(self, quartz: object) -> None:
+        self._quartz = quartz
+        self.created: list[dict[str, int]] = []
+        self.posts: list[tuple[int, dict[str, int]]] = []
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._quartz, name)
+
+    def CGEventCreateKeyboardEvent(
+        self, source: object, keycode: int, is_down: bool
+    ) -> object:
+        event = self._quartz.CGEventCreateKeyboardEvent(source, keycode, is_down)
+        self.created.append(self._snapshot(event))
+        return event
+
+    def CGEventPost(self, event_tap: int, event: object) -> None:
+        self.posts.append((int(event_tap), self._snapshot(event)))
+
+    def _snapshot(self, event: object) -> dict[str, int]:
+        quartz = self._quartz
+        return {
+            "type": int(quartz.CGEventGetType(event)),
+            "keycode": int(
+                quartz.CGEventGetIntegerValueField(
+                    event, quartz.kCGKeyboardEventKeycode
+                )
+            ),
+            "flags": int(quartz.CGEventGetFlags(event)),
+            "marker": int(
+                quartz.CGEventGetIntegerValueField(
+                    event, quartz.kCGEventSourceUserData
+                )
+            ),
+        }
+
+
+class MacQuartzPasteDryRunTests(unittest.TestCase):
+    def setUp(self) -> None:
+        try:
+            quartz = importlib.import_module("Quartz")
+        except ImportError as exc:
+            self.skipTest(f"PyObjC Quartz is unavailable: {exc}")
+        required = (
+            "CGEventCreateKeyboardEvent",
+            "CGEventGetFlags",
+            "CGEventGetIntegerValueField",
+            "CGEventGetType",
+            "CGEventPost",
+            "CGEventSetFlags",
+            "CGEventSetIntegerValueField",
+            "CGEventSourceKeyState",
+            "kCGEventFlagMaskCommand",
+            "kCGEventFlagMaskControl",
+            "kCGEventFlagsChanged",
+            "kCGEventKeyDown",
+            "kCGEventKeyUp",
+            "kCGEventSourceStateHIDSystemState",
+            "kCGEventSourceUserData",
+            "kCGHIDEventTap",
+            "kCGKeyboardEventKeycode",
+        )
+        missing = [name for name in required if not hasattr(quartz, name)]
+        if missing:
+            self.skipTest(
+                "PyObjC Quartz is missing required symbols: "
+                + ", ".join(missing)
+            )
+        self.quartz = quartz
+        self._original_post = quartz.CGEventPost
+
+        def forbid_real_post(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError(
+                "native paste dry-run must not call Quartz.CGEventPost"
+            )
+
+        quartz.CGEventPost = forbid_real_post
+
+    def tearDown(self) -> None:
+        quartz = getattr(self, "quartz", None)
+        original = getattr(self, "_original_post", None)
+        if quartz is not None and original is not None:
+            quartz.CGEventPost = original
+
+    def test_command_v_preserves_device_flags_without_posting(self) -> None:
+        self._assert_dry_run_chord(
+            PyObjCMacNativeApi.send_command_v,
+            _LEFT_COMMAND_KEYCODE,
+            _LEFT_COMMAND_DEVICE,
+            "kCGEventFlagMaskCommand",
+        )
+
+    def test_control_v_preserves_device_flags_without_posting(self) -> None:
+        self._assert_dry_run_chord(
+            PyObjCMacNativeApi.send_control_v,
+            _LEFT_CONTROL_KEYCODE,
+            _LEFT_CONTROL_DEVICE,
+            "kCGEventFlagMaskControl",
+        )
+
+    def _assert_dry_run_chord(
+        self,
+        send: object,
+        keycode: int,
+        device_mask: int,
+        generic_name: str,
+    ) -> None:
+        if bool(
+            self.quartz.CGEventSourceKeyState(
+                self.quartz.kCGEventSourceStateHIDSystemState,
+                keycode,
+            )
+        ):
+            self.skipTest(
+                f"keycode {keycode} is physically down; dry-run needs it released"
+            )
+        proxy = _NonPostingQuartz(self.quartz)
+        api = _native_api(_native_modules(quartz=proxy))
+        self.assertTrue(send(api))
+        self.assertEqual(len(proxy.created), 4)
+        self.assertEqual(len(proxy.posts), 4)
+        generic = int(getattr(self.quartz, generic_name))
+        expected_types = (
+            int(self.quartz.kCGEventFlagsChanged),
+            int(self.quartz.kCGEventKeyDown),
+            int(self.quartz.kCGEventKeyUp),
+            int(self.quartz.kCGEventFlagsChanged),
+        )
+        expected_keycodes = (keycode, _V_KEYCODE, _V_KEYCODE, keycode)
+        self.assertEqual(
+            [event["type"] for event in proxy.created],
+            list(expected_types),
+        )
+        self.assertEqual(
+            [event["keycode"] for event in proxy.created],
+            list(expected_keycodes),
+        )
+        down_initial = proxy.created[0]["flags"]
+        release_baseline = proxy.created[3]["flags"]
+        self.assertTrue(down_initial & device_mask)
+        self.assertTrue(down_initial & generic)
+        expected_down = down_initial | generic
+        posted = []
+        for index, (tap, event) in enumerate(proxy.posts):
+            self.assertEqual(tap, int(self.quartz.kCGHIDEventTap))
+            self.assertEqual(event["type"], expected_types[index])
+            self.assertEqual(event["keycode"], expected_keycodes[index])
+            self.assertEqual(event["marker"], 0x56494D32)
+            posted.append(event)
+        self.assertEqual(posted[0]["flags"], expected_down)
+        self.assertEqual(posted[1]["flags"], expected_down)
+        self.assertEqual(posted[2]["flags"], expected_down)
+        self.assertTrue(posted[0]["flags"] & device_mask)
+        self.assertTrue(posted[0]["flags"] & generic)
+        self.assertEqual(posted[3]["flags"], release_baseline)
+        self.assertFalse(posted[3]["flags"] & device_mask)
+        self.assertFalse(posted[3]["flags"] & generic)
 
 
 if __name__ == "__main__":
