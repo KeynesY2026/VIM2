@@ -13,8 +13,15 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
 )
-from PySide6.QtGui import QColor, QCursor, QIcon, QPainter, QPixmap
-from PySide6.QtGui import QAction
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QColor,
+    QCursor,
+    QIcon,
+    QPainter,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QGraphicsOpacityEffect,
@@ -27,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from vim2.config import MacPasteShortcut
 from vim2.models import MODEL_SPECS, ModelId
 from vim2.state import AppState
 
@@ -60,6 +68,7 @@ STATUS_TOOLTIPS: dict[AppState, str] = {
 @dataclass(frozen=True, slots=True)
 class UiCapabilities:
     can_switch_model: bool
+    can_switch_paste_shortcut: bool
     can_retry: bool
     can_discard: bool
 
@@ -67,6 +76,7 @@ class UiCapabilities:
     def for_state(cls, state: AppState) -> UiCapabilities:
         return cls(
             can_switch_model=state is AppState.READY,
+            can_switch_paste_shortcut=state is AppState.READY,
             can_retry=state is AppState.RETRY_PENDING,
             can_discard=state is AppState.RETRY_PENDING,
         )
@@ -118,13 +128,15 @@ class VoiceOverlay(QWidget):
     _MAXIMUM_WIDTH = 560
 
     def __init__(self) -> None:
-        super().__init__(
-            None,
+        window_flags = (
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.NoDropShadowWindowHint,
+            | Qt.WindowType.NoDropShadowWindowHint
         )
+        if not hasattr(ctypes, "WinDLL"):
+            window_flags |= Qt.WindowType.WindowDoesNotAcceptFocus
+        super().__init__(None, window_flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -172,7 +184,7 @@ class VoiceOverlay(QWidget):
         self._fade.finished.connect(self._park_if_transparent)
         self._opacity.setOpacity(0.0)
         self._fade_target_visible = False
-        self._target_window: int | None = None
+        self._target_window: object | None = None
         self._target_screen = None
         self.move(-9999, 0)
         self.show()
@@ -207,7 +219,7 @@ class VoiceOverlay(QWidget):
     def _tail(text: str, limit: int = 72) -> str:
         return text if len(text) <= limit else f"…{text[-limit:]}"
 
-    def show_for_window(self, target_window: int | None = None) -> None:
+    def show_for_window(self, target_window: object | None = None) -> None:
         self._target_window = target_window
         self._target_screen = None
         self._show_on_target_screen()
@@ -226,6 +238,9 @@ class VoiceOverlay(QWidget):
         self._fade_target_visible = True
         self._fade.setStartValue(self._opacity.opacity())
         self._fade.setEndValue(1.0)
+        if not hasattr(ctypes, "WinDLL"):
+            self.show()
+            self.raise_()
         self._ensure_topmost()
         self._fade.start()
 
@@ -331,7 +346,7 @@ class VoiceOverlay(QWidget):
             0x0002 | 0x0001 | 0x0010 | 0x0040,
         )
 
-    def _screen_for_window(self, target_window: int | None):
+    def _screen_for_window(self, target_window: object | None):
         app = QApplication.instance()
         if target_window and hasattr(ctypes, "WinDLL"):
             rect = wintypes_rect()
@@ -380,7 +395,15 @@ def wintypes_rect() -> _Rect:
 
 
 class DesktopView:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        supported_models: tuple[ModelId, ...] | None = None,
+        *,
+        macos_paste_shortcut: MacPasteShortcut | None = None,
+    ) -> None:
+        self._supported_models = frozenset(
+            tuple(ModelId) if supported_models is None else supported_models
+        )
         self.overlay = VoiceOverlay()
         self.tray = QSystemTrayIcon()
         self.menu = QMenu()
@@ -396,12 +419,39 @@ class DesktopView:
         self.accurate_model_action = QAction(
             "高精度：Qwen3-ASR 1.7B INT8", self.model_menu
         )
-        for action in (
-            self.cpu_model_action,
-            self.fast_model_action,
-            self.accurate_model_action,
-        ):
+        self._model_actions = {
+            ModelId.CPU: self.cpu_model_action,
+            ModelId.FAST: self.fast_model_action,
+            ModelId.ACCURATE: self.accurate_model_action,
+        }
+        for model_id, action in self._model_actions.items():
             action.setCheckable(True)
+            action.setVisible(model_id in self._supported_models)
+
+        self.paste_shortcut_menu: QMenu | None = None
+        self.paste_shortcut_action_group: QActionGroup | None = None
+        self.command_v_action: QAction | None = None
+        self.control_v_action: QAction | None = None
+        if macos_paste_shortcut is not None:
+            self.paste_shortcut_menu = self.menu.addMenu("粘贴快捷键")
+            self.paste_shortcut_action_group = QActionGroup(
+                self.paste_shortcut_menu
+            )
+            self.paste_shortcut_action_group.setExclusive(True)
+            self.command_v_action = QAction(
+                "macOS：⌘V", self.paste_shortcut_menu
+            )
+            self.control_v_action = QAction(
+                "Windows / 远程桌面：Ctrl+V",
+                self.paste_shortcut_menu,
+            )
+            for action in (self.command_v_action, self.control_v_action):
+                action.setCheckable(True)
+                self.paste_shortcut_action_group.addAction(action)
+                self.paste_shortcut_menu.addAction(action)
+            self.paste_shortcut_menu.setEnabled(False)
+            self.render_macos_paste_shortcut(macos_paste_shortcut)
+
         self.open_hotwords_action = QAction("打开热词文件")
         self.reload_hotwords_action = QAction("重新加载热词")
         self.about_action = QAction("关于")
@@ -424,7 +474,7 @@ class DesktopView:
         self.tray.setToolTip(STATUS_TOOLTIPS[AppState.STARTING])
 
         self._controller = None
-        self._target_window: int | None = None
+        self._target_window: object | None = None
         self._latest_preview = ""
         self._preview_timer = QTimer()
         self._preview_timer.setInterval(1_000)
@@ -448,6 +498,18 @@ class DesktopView:
         self.accurate_model_action.triggered.connect(
             lambda: controller.switch_model(ModelId.ACCURATE)
         )
+        if self.command_v_action is not None:
+            self.command_v_action.triggered.connect(
+                lambda: controller.switch_macos_paste_shortcut(
+                    MacPasteShortcut.COMMAND_V
+                )
+            )
+        if self.control_v_action is not None:
+            self.control_v_action.triggered.connect(
+                lambda: controller.switch_macos_paste_shortcut(
+                    MacPasteShortcut.CONTROL_V
+                )
+            )
         self.open_hotwords_action.triggered.connect(
             controller.open_hotwords_file
         )
@@ -466,12 +528,15 @@ class DesktopView:
         self.tray.setToolTip(STATUS_TOOLTIPS[state])
         self.status_action.setText(f"VIM2：{self._state_label(state)}")
         self.model_menu.setEnabled(capabilities.can_switch_model)
-        for action in (
-            self.cpu_model_action,
-            self.fast_model_action,
-            self.accurate_model_action,
-        ):
-            action.setEnabled(capabilities.can_switch_model)
+        if self.paste_shortcut_menu is not None:
+            self.paste_shortcut_menu.setEnabled(
+                capabilities.can_switch_paste_shortcut
+            )
+        for action_model_id, action in self._model_actions.items():
+            action.setEnabled(
+                capabilities.can_switch_model
+                and action_model_id in self._supported_models
+            )
         self.cpu_model_action.setChecked(model_id is ModelId.CPU)
         self.fast_model_action.setChecked(model_id is ModelId.FAST)
         self.accurate_model_action.setChecked(model_id is ModelId.ACCURATE)
@@ -493,10 +558,22 @@ class DesktopView:
         elif state is AppState.READY:
             self.overlay.fade_out()
 
+    def render_macos_paste_shortcut(
+        self, shortcut: MacPasteShortcut
+    ) -> None:
+        if self.command_v_action is None or self.control_v_action is None:
+            return
+        self.command_v_action.setChecked(
+            shortcut is MacPasteShortcut.COMMAND_V
+        )
+        self.control_v_action.setChecked(
+            shortcut is MacPasteShortcut.CONTROL_V
+        )
+
     def start_recording_timers(
         self,
         max_seconds: int,
-        target_window: int,
+        target_window: object,
         preview_interval_ms: int,
     ) -> None:
         self._target_window = target_window

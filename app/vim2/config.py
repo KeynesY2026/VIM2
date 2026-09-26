@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from vim2.models import ModelId
@@ -18,6 +19,21 @@ MIN_TAIL_OVERLAP_SECONDS = 1
 MAX_TAIL_OVERLAP_SECONDS = 15
 
 
+class MacPasteShortcut(StrEnum):
+    COMMAND_V = "command-v"
+    CONTROL_V = "control-v"
+
+
+@dataclass(slots=True)
+class MacPasteShortcutSelection:
+    """Shared in-memory truth for the currently active macOS paste chord."""
+
+    shortcut: MacPasteShortcut = MacPasteShortcut.COMMAND_V
+
+    def __post_init__(self) -> None:
+        self.shortcut = MacPasteShortcut(self.shortcut)
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     selected_model: ModelId = ModelId.FAST
@@ -26,6 +42,7 @@ class Settings:
     preview_interval_ms: int = DEFAULT_PREVIEW_INTERVAL_MS
     preview_window_seconds: int = DEFAULT_PREVIEW_WINDOW_SECONDS
     tail_overlap_seconds: int = DEFAULT_TAIL_OVERLAP_SECONDS
+    macos_paste_shortcut: MacPasteShortcut = MacPasteShortcut.COMMAND_V
     normalize_numbers: bool = True
 
 
@@ -50,6 +67,23 @@ class SettingsRepository:
         except ValueError as exc:
             raise ValueError(
                 f"Invalid selected_model: {values.get('selected_model')!r}"
+            ) from exc
+
+        try:
+            macos_paste_shortcut = MacPasteShortcut(
+                values.get(
+                    "macos_paste_shortcut",
+                    MacPasteShortcut.COMMAND_V,
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            allowed = ", ".join(
+                shortcut.value for shortcut in MacPasteShortcut
+            )
+            raise ValueError(
+                "Invalid macos_paste_shortcut: "
+                f"{values.get('macos_paste_shortcut')!r}; expected one of: "
+                f"{allowed}"
             ) from exc
 
         max_seconds = values.get("max_recording_seconds", 300)
@@ -114,6 +148,7 @@ class SettingsRepository:
             preview_interval_ms=preview_interval_ms,
             preview_window_seconds=preview_window_seconds,
             tail_overlap_seconds=tail_overlap_seconds,
+            macos_paste_shortcut=macos_paste_shortcut,
             normalize_numbers=normalize_numbers,
         )
 
@@ -122,17 +157,58 @@ class SettingsRepository:
         settings_values = asdict(settings)
         settings_values.pop("hotkey")
         settings_values["selected_model"] = settings.selected_model.value
+        settings_values["macos_paste_shortcut"] = (
+            settings.macos_paste_shortcut.value
+        )
         self._write_atomic(
             self._settings_path,
+            self._serialize_settings_values(settings_values),
+        )
+        self._write_atomic(self._hotkey_path, f"{settings.hotkey}\n")
+
+    def update_macos_paste_shortcut(
+        self, shortcut: MacPasteShortcut
+    ) -> None:
+        """Atomically update only the shortcut field in settings.json."""
+
+        shortcut = MacPasteShortcut(shortcut)
+        # A local overlay wins on load. Refuse a portable-only update that
+        # would appear successful now but revert after the next launch.
+        if self._local_settings_path.is_file():
+            local_values = json.loads(
+                self._local_settings_path.read_text(encoding="utf-8")
+            )
+            if "macos_paste_shortcut" in local_values:
+                raise ValueError(
+                    "Remove macos_paste_shortcut from settings.local.json "
+                    "before changing it from the tray"
+                )
+        self._config_dir.mkdir(parents=True, exist_ok=True)
+        settings_values: dict[str, object] = {}
+        if self._settings_path.is_file():
+            loaded = json.loads(
+                self._settings_path.read_text(encoding="utf-8")
+            )
+            if not isinstance(loaded, dict):
+                raise ValueError("settings.json must contain a JSON object")
+            settings_values = loaded
+        settings_values["macos_paste_shortcut"] = shortcut.value
+        self._write_atomic(
+            self._settings_path,
+            self._serialize_settings_values(settings_values),
+        )
+
+    @staticmethod
+    def _serialize_settings_values(values: dict[str, object]) -> str:
+        return (
             json.dumps(
-                settings_values,
+                values,
                 ensure_ascii=False,
                 indent=2,
                 sort_keys=True,
             )
-            + "\n",
+            + "\n"
         )
-        self._write_atomic(self._hotkey_path, f"{settings.hotkey}\n")
 
     def save_selected_model(self, model_id: ModelId) -> None:
         settings_path = (
@@ -161,5 +237,18 @@ class SettingsRepository:
     @staticmethod
     def _write_atomic(path: Path, content: str) -> None:
         temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(content, encoding="utf-8")
-        temporary.replace(path)
+        try:
+            temporary.write_text(content, encoding="utf-8")
+            temporary.replace(path)
+        except BaseException as error:
+            cleanup_error: OSError | None = None
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError as caught_cleanup_error:
+                cleanup_error = caught_cleanup_error
+            if cleanup_error is not None and hasattr(error, "add_note"):
+                error.add_note(
+                    f"Could not remove temporary settings file "
+                    f"{temporary}: {cleanup_error}"
+                )
+            raise

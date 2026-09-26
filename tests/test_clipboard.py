@@ -1,4 +1,5 @@
 import ctypes
+import sys
 
 import pytest
 
@@ -84,6 +85,10 @@ def test_send_input_failure_is_reported_without_clearing_clipboard() -> None:
     assert api.clipboard_text == "recoverable text"
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="requires the native Windows ctypes ABI",
+)
 def test_send_input_structure_matches_native_windows_abi() -> None:
     expected_size = 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28
 

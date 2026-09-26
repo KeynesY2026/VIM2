@@ -4,7 +4,11 @@ from dataclasses import replace
 import threading
 from typing import Callable, Protocol
 
-from vim2.config import Settings
+from vim2.config import (
+    MacPasteShortcut,
+    MacPasteShortcutSelection,
+    Settings,
+)
 from vim2.hotwords import HotwordSnapshot
 from vim2.models import MODEL_SPECS, ModelId
 from vim2.recognizer import TranscriptionCancelled
@@ -14,6 +18,10 @@ from vim2.state import AppState, StateMachine
 
 class SettingsWriter(Protocol):
     def save(self, settings: Settings) -> None: ...
+
+    def update_macos_paste_shortcut(
+        self, shortcut: MacPasteShortcut
+    ) -> None: ...
 
     def save_selected_model(self, model_id: ModelId) -> None: ...
 
@@ -37,7 +45,7 @@ class ControllerView(Protocol):
     def start_recording_timers(
         self,
         max_seconds: int,
-        target_window: int,
+        target_window: object,
         preview_interval_ms: int,
     ) -> None: ...
 
@@ -54,6 +62,10 @@ class ControllerView(Protocol):
     def show_retry_error(self, message: str) -> None: ...
 
     def hide_overlay(self) -> None: ...
+
+    def render_macos_paste_shortcut(
+        self, shortcut: MacPasteShortcut
+    ) -> None: ...
 
 
 class TaskRunner(Protocol):
@@ -76,8 +88,11 @@ class AppController:
         session: VoiceSession,
         view: ControllerView,
         task_runner: TaskRunner,
-        foreground_window: Callable[[], int],
+        foreground_window: Callable[[], object],
         restart_application: Callable[[], None] = lambda: None,
+        macos_paste_shortcut_selection: (
+            MacPasteShortcutSelection | None
+        ) = None,
         open_hotwords_file: Callable[[], bool] = lambda: False,
     ) -> None:
         self._machine = machine
@@ -89,6 +104,17 @@ class AppController:
         self._runner = task_runner
         self._foreground_window = foreground_window
         self._restart_application = restart_application
+        self._macos_paste_shortcut_selection = (
+            macos_paste_shortcut_selection
+        )
+        if (
+            macos_paste_shortcut_selection is not None
+            and macos_paste_shortcut_selection.shortcut
+            is not settings.macos_paste_shortcut
+        ):
+            raise ValueError(
+                "macOS paste shortcut selection must match loaded settings"
+            )
         self._open_hotwords_file = open_hotwords_file
         self._preview_busy = False
         self._preview_pending = False
@@ -105,6 +131,12 @@ class AppController:
     @property
     def selected_model(self) -> ModelId:
         return self._settings.selected_model
+
+    @property
+    def macos_paste_shortcut(self) -> MacPasteShortcut:
+        if self._macos_paste_shortcut_selection is not None:
+            return self._macos_paste_shortcut_selection.shortcut
+        return self._settings.macos_paste_shortcut
 
     def start(self) -> None:
         self._machine.transition_to(AppState.MODEL_LOADING)
@@ -281,6 +313,35 @@ class AppController:
             self._on_finalized,
             self._on_final_error,
         )
+
+    def switch_macos_paste_shortcut(
+        self, shortcut: MacPasteShortcut
+    ) -> None:
+        selection = self._macos_paste_shortcut_selection
+        if selection is None:
+            return
+        if self.state is not AppState.READY or self._operation_busy:
+            return
+        shortcut = MacPasteShortcut(shortcut)
+        previous_shortcut = selection.shortcut
+        if shortcut is previous_shortcut:
+            return
+
+        try:
+            self._settings_repository.update_macos_paste_shortcut(shortcut)
+        except Exception as exc:
+            self._view.render_macos_paste_shortcut(previous_shortcut)
+            self._view.show_error(
+                f"无法切换 macOS 粘贴快捷键：{exc}"
+            )
+            return
+
+        selection.shortcut = shortcut
+        self._settings = replace(
+            self._settings,
+            macos_paste_shortcut=shortcut,
+        )
+        self._view.render_macos_paste_shortcut(shortcut)
 
     def reload_hotwords(self) -> None:
         if self.state is not AppState.READY or self._operation_busy:
