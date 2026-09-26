@@ -256,7 +256,9 @@ class QwenRecognizer:
                 MODEL_SPECS[model_id].backend
                 is ModelBackend.SHERPA_ONNX_CPU
             ):
-                return self._transcribe_sherpa(audio, cancel_event)
+                text = self._transcribe_sherpa(audio, cancel_event)
+                logger.info("Transcription completed with model %s", model_id)
+                return text
             model_audio: tuple[Any, int] | str
             if isinstance(audio, AudioArtifact):
                 model_audio = (audio.samples, audio.sample_rate)
@@ -318,6 +320,8 @@ class QwenRecognizer:
             samples = samples[:, 0]
         stream = self._model.create_stream()
         stream.accept_waveform(sample_rate, samples)
+        if cancel_event is not None and cancel_event.is_set():
+            raise TranscriptionCancelled()
         self._model.decode_stream(stream)
         if cancel_event is not None and cancel_event.is_set():
             raise TranscriptionCancelled()

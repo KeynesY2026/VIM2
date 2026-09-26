@@ -11,6 +11,9 @@ DEFAULT_HOTKEY = "RightAlt"
 DEFAULT_PREVIEW_INTERVAL_MS = 1_000
 MIN_PREVIEW_INTERVAL_MS = 250
 MAX_PREVIEW_INTERVAL_MS = 1_000
+DEFAULT_PREVIEW_WINDOW_SECONDS = 8
+MIN_PREVIEW_WINDOW_SECONDS = 1
+MAX_PREVIEW_WINDOW_SECONDS = 30
 DEFAULT_TAIL_OVERLAP_SECONDS = 5
 MIN_TAIL_OVERLAP_SECONDS = 1
 MAX_TAIL_OVERLAP_SECONDS = 15
@@ -37,6 +40,7 @@ class Settings:
     hotkey: str = DEFAULT_HOTKEY
     max_recording_seconds: int = 300
     preview_interval_ms: int = DEFAULT_PREVIEW_INTERVAL_MS
+    preview_window_seconds: int = DEFAULT_PREVIEW_WINDOW_SECONDS
     tail_overlap_seconds: int = DEFAULT_TAIL_OVERLAP_SECONDS
     macos_paste_shortcut: MacPasteShortcut = MacPasteShortcut.COMMAND_V
     normalize_numbers: bool = True
@@ -46,12 +50,17 @@ class SettingsRepository:
     def __init__(self, config_dir: Path) -> None:
         self._config_dir = config_dir
         self._settings_path = config_dir / "settings.json"
+        self._local_settings_path = Path.home() / ".vim2" / "settings.local.json"
         self._hotkey_path = config_dir / "hotkey.conf"
 
     def load(self) -> Settings:
         values: dict[str, object] = {}
         if self._settings_path.is_file():
             values = json.loads(self._settings_path.read_text(encoding="utf-8"))
+        if self._local_settings_path.is_file():
+            values.update(
+                json.loads(self._local_settings_path.read_text(encoding="utf-8"))
+            )
 
         try:
             model = ModelId(values.get("selected_model", ModelId.FAST))
@@ -96,6 +105,19 @@ class SettingsRepository:
                 "preview_interval_ms must be an integer from 250 through 1000"
             )
 
+        preview_window_seconds = values.get(
+            "preview_window_seconds", DEFAULT_PREVIEW_WINDOW_SECONDS
+        )
+        if (
+            not isinstance(preview_window_seconds, int)
+            or not MIN_PREVIEW_WINDOW_SECONDS
+            <= preview_window_seconds
+            <= MAX_PREVIEW_WINDOW_SECONDS
+        ):
+            raise ValueError(
+                "preview_window_seconds must be an integer from 1 through 30"
+            )
+
         tail_overlap_seconds = values.get(
             "tail_overlap_seconds", DEFAULT_TAIL_OVERLAP_SECONDS
         )
@@ -124,6 +146,7 @@ class SettingsRepository:
             hotkey=hotkey,
             max_recording_seconds=max_seconds,
             preview_interval_ms=preview_interval_ms,
+            preview_window_seconds=preview_window_seconds,
             tail_overlap_seconds=tail_overlap_seconds,
             macos_paste_shortcut=macos_paste_shortcut,
             normalize_numbers=normalize_numbers,
@@ -149,6 +172,17 @@ class SettingsRepository:
         """Atomically update only the shortcut field in settings.json."""
 
         shortcut = MacPasteShortcut(shortcut)
+        # A local overlay wins on load. Refuse a portable-only update that
+        # would appear successful now but revert after the next launch.
+        if self._local_settings_path.is_file():
+            local_values = json.loads(
+                self._local_settings_path.read_text(encoding="utf-8")
+            )
+            if "macos_paste_shortcut" in local_values:
+                raise ValueError(
+                    "Remove macos_paste_shortcut from settings.local.json "
+                    "before changing it from the tray"
+                )
         self._config_dir.mkdir(parents=True, exist_ok=True)
         settings_values: dict[str, object] = {}
         if self._settings_path.is_file():
@@ -174,6 +208,30 @@ class SettingsRepository:
                 sort_keys=True,
             )
             + "\n"
+        )
+
+    def save_selected_model(self, model_id: ModelId) -> None:
+        settings_path = (
+            self._local_settings_path
+            if self._local_settings_path.is_file()
+            else self._settings_path
+        )
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_values: dict[str, object] = {}
+        if settings_path.is_file():
+            settings_values = json.loads(
+                settings_path.read_text(encoding="utf-8")
+            )
+        settings_values["selected_model"] = model_id.value
+        self._write_atomic(
+            settings_path,
+            json.dumps(
+                settings_values,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
         )
 
     @staticmethod

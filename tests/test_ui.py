@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 import vim2.ui as ui_module
 from vim2.config import MacPasteShortcut
@@ -281,6 +281,24 @@ def test_live_transcribing_updates_intermediate_preview() -> None:
     assert view.overlay.status_text == "正在录音"
 
 
+def test_identical_preview_does_not_repaint_overlay() -> None:
+    _app()
+    view = DesktopView()
+    updates = []
+    original_set_recording = view.overlay.set_recording
+
+    def record_update(*, preview: str) -> None:
+        updates.append(preview)
+        original_set_recording(preview=preview)
+
+    view.overlay.set_recording = record_update
+
+    view.show_preview("相同文本")
+    view.show_preview("相同文本")
+
+    assert updates == ["相同文本"]
+
+
 def test_finalizing_shows_recognizing_state_with_latest_preview() -> None:
     _app()
     view = DesktopView()
@@ -310,8 +328,12 @@ def test_tray_menu_reflects_state_and_selected_model() -> None:
     view.render_state(AppState.READY, model_id=ModelId.FAST)
 
     assert view.tray.toolTip() == "VIM2 - Ready"
-    assert view.recording_action.text() == "开始录音"
-    assert view.recording_action.isEnabled()
+    assert "开始录音" not in [
+        action.text() for action in view.menu.actions()
+    ]
+    assert "停止录音" not in [
+        action.text() for action in view.menu.actions()
+    ]
     assert view.fast_model_action.isChecked()
     assert view.fast_model_action.isEnabled()
 
@@ -319,8 +341,6 @@ def test_tray_menu_reflects_state_and_selected_model() -> None:
         AppState.FINALIZING, model_id=ModelId.FAST
     )
 
-    assert view.recording_action.text() == "识别中…"
-    assert not view.recording_action.isEnabled()
     assert not view.fast_model_action.isEnabled()
 
 
@@ -380,6 +400,33 @@ def test_windows_tray_menu_does_not_show_macos_paste_shortcuts() -> None:
     assert view.command_v_action is None
     assert view.control_v_action is None
     assert "粘贴快捷键" not in [action.text() for action in view.menu.actions()]
+
+
+def test_clicking_tray_icon_does_not_toggle_recording() -> None:
+    _app()
+    view = DesktopView()
+
+    class Controller:
+        recording_toggles = 0
+
+        def toggle_recording(self) -> None:
+            self.recording_toggles += 1
+
+        def switch_model(self, model_id: ModelId) -> None:
+            del model_id
+
+        def open_hotwords_file(self) -> None:
+            pass
+
+        def reload_hotwords(self) -> None:
+            pass
+
+    controller = Controller()
+    view.bind(controller, lambda: None)
+
+    view.tray.activated.emit(QSystemTrayIcon.ActivationReason.Trigger)
+
+    assert controller.recording_toggles == 0
 
 
 def test_tray_menu_supports_cpu_model() -> None:

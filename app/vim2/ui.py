@@ -67,7 +67,6 @@ STATUS_TOOLTIPS: dict[AppState, str] = {
 
 @dataclass(frozen=True, slots=True)
 class UiCapabilities:
-    can_toggle_recording: bool
     can_switch_model: bool
     can_switch_paste_shortcut: bool
     can_retry: bool
@@ -76,12 +75,6 @@ class UiCapabilities:
     @classmethod
     def for_state(cls, state: AppState) -> UiCapabilities:
         return cls(
-            can_toggle_recording=state
-            in {
-                AppState.READY,
-                AppState.RECORDING,
-                AppState.LIVE_TRANSCRIBING,
-            },
             can_switch_model=state is AppState.READY,
             can_switch_paste_shortcut=state is AppState.READY,
             can_retry=state is AppState.RETRY_PENDING,
@@ -416,7 +409,6 @@ class DesktopView:
         self.menu = QMenu()
         self.status_action = QAction("VIM2：启动中")
         self.status_action.setEnabled(False)
-        self.recording_action = QAction("开始录音")
         self.model_menu = self.menu.addMenu("识别模型")
         self.cpu_model_action = QAction(
             "CPU：Qwen3-ASR 0.6B INT8", self.model_menu
@@ -467,7 +459,6 @@ class DesktopView:
 
         self.menu.addAction(self.status_action)
         self.menu.addSeparator()
-        self.menu.addAction(self.recording_action)
         self.model_menu.addAction(self.cpu_model_action)
         self.model_menu.addSeparator()
         self.model_menu.addAction(self.fast_model_action)
@@ -498,9 +489,6 @@ class DesktopView:
 
     def bind(self, controller, quit_callback) -> None:
         self._controller = controller
-        self.recording_action.triggered.connect(
-            controller.toggle_recording
-        )
         self.cpu_model_action.triggered.connect(
             lambda: controller.switch_model(ModelId.CPU)
         )
@@ -530,7 +518,6 @@ class DesktopView:
         )
         self.about_action.triggered.connect(self._show_about)
         self.exit_action.triggered.connect(quit_callback)
-        self.tray.activated.connect(self._on_tray_activated)
 
     def show(self) -> None:
         self.tray.show()
@@ -540,10 +527,6 @@ class DesktopView:
         self.tray.setIcon(TrayIconFactory.create(state))
         self.tray.setToolTip(STATUS_TOOLTIPS[state])
         self.status_action.setText(f"VIM2：{self._state_label(state)}")
-        self.recording_action.setEnabled(
-            capabilities.can_toggle_recording
-        )
-        self.recording_action.setText(self._record_action_label(state))
         self.model_menu.setEnabled(capabilities.can_switch_model)
         if self.paste_shortcut_menu is not None:
             self.paste_shortcut_menu.setEnabled(
@@ -607,6 +590,8 @@ class DesktopView:
         self._max_timer.stop()
 
     def show_preview(self, text: str) -> None:
+        if text == self._latest_preview:
+            return
         self._latest_preview = text
         self.overlay.set_recording(preview=text)
 
@@ -666,15 +651,6 @@ class DesktopView:
         if self._controller is not None:
             self._controller.toggle_recording()
 
-    def _on_tray_activated(
-        self, reason: QSystemTrayIcon.ActivationReason
-    ) -> None:
-        if (
-            reason is QSystemTrayIcon.ActivationReason.Trigger
-            and self._controller is not None
-        ):
-            self._controller.toggle_recording()
-
     @staticmethod
     def _state_label(state: AppState) -> str:
         return {
@@ -689,14 +665,6 @@ class DesktopView:
             AppState.ERROR: "错误",
             AppState.EXITING: "退出中",
         }[state]
-
-    @staticmethod
-    def _record_action_label(state: AppState) -> str:
-        if state in {AppState.RECORDING, AppState.LIVE_TRANSCRIBING}:
-            return "停止录音"
-        if state is AppState.FINALIZING:
-            return "识别中…"
-        return "开始录音"
 
     def _show_about(self) -> None:
         QMessageBox.information(

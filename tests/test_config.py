@@ -6,6 +6,7 @@ import pytest
 from vim2.config import (
     DEFAULT_HOTKEY,
     DEFAULT_PREVIEW_INTERVAL_MS,
+    DEFAULT_PREVIEW_WINDOW_SECONDS,
     DEFAULT_TAIL_OVERLAP_SECONDS,
     MacPasteShortcut,
     Settings,
@@ -68,6 +69,13 @@ def _assert_only_settings_json_was_atomically_replaced(
     )
 
 
+@pytest.fixture(autouse=True)
+def isolate_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home_dir))
+
+
 def test_missing_configuration_uses_documented_defaults(tmp_path: Path) -> None:
     repository = SettingsRepository(tmp_path / "config")
 
@@ -78,6 +86,7 @@ def test_missing_configuration_uses_documented_defaults(tmp_path: Path) -> None:
         hotkey=DEFAULT_HOTKEY,
         max_recording_seconds=300,
         preview_interval_ms=DEFAULT_PREVIEW_INTERVAL_MS,
+        preview_window_seconds=DEFAULT_PREVIEW_WINDOW_SECONDS,
         tail_overlap_seconds=DEFAULT_TAIL_OVERLAP_SECONDS,
         macos_paste_shortcut=MacPasteShortcut.COMMAND_V,
         normalize_numbers=True,
@@ -91,6 +100,7 @@ def test_settings_round_trip_in_portable_config_directory(tmp_path: Path) -> Non
         hotkey="LeftCtrl+RightAlt",
         max_recording_seconds=45,
         preview_interval_ms=500,
+        preview_window_seconds=9,
         tail_overlap_seconds=7,
         macos_paste_shortcut=MacPasteShortcut.CONTROL_V,
         normalize_numbers=False,
@@ -109,10 +119,147 @@ def test_settings_round_trip_in_portable_config_directory(tmp_path: Path) -> Non
         "macos_paste_shortcut": "control-v",
         "max_recording_seconds": 45,
         "preview_interval_ms": 500,
+        "preview_window_seconds": 9,
         "selected_model": "qwen3-asr-1.7b-int8",
         "tail_overlap_seconds": 7,
         "normalize_numbers": False,
     }
+
+
+def test_shortcut_and_local_model_override_survive_both_updates(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    repository = SettingsRepository(config_dir)
+    repository.save(Settings(selected_model=ModelId.CPU))
+    local_path = tmp_path / "home" / ".vim2" / "settings.local.json"
+    local_path.parent.mkdir()
+    local_path.write_text(
+        json.dumps({"selected_model": ModelId.FAST.value}), encoding="utf-8"
+    )
+
+    repository.update_macos_paste_shortcut(MacPasteShortcut.CONTROL_V)
+    repository.save_selected_model(ModelId.ACCURATE)
+
+    loaded = repository.load()
+    assert loaded.macos_paste_shortcut is MacPasteShortcut.CONTROL_V
+    assert loaded.selected_model is ModelId.ACCURATE
+    assert json.loads((config_dir / "settings.json").read_text(
+        encoding="utf-8"
+    ))["macos_paste_shortcut"] == "control-v"
+    assert json.loads(local_path.read_text(encoding="utf-8")) == {
+        "selected_model": ModelId.ACCURATE.value,
+    }
+
+
+def test_local_shortcut_override_rejects_portable_only_change(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    repository = SettingsRepository(config_dir)
+    repository.save(Settings(selected_model=ModelId.CPU))
+    settings_path = config_dir / "settings.json"
+    original = settings_path.read_bytes()
+    local_path = tmp_path / "home" / ".vim2" / "settings.local.json"
+    local_path.parent.mkdir()
+    local_path.write_text(
+        json.dumps({"macos_paste_shortcut": "command-v"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Remove macos_paste_shortcut"):
+        repository.update_macos_paste_shortcut(MacPasteShortcut.CONTROL_V)
+
+    assert settings_path.read_bytes() == original
+    assert repository.load().macos_paste_shortcut is MacPasteShortcut.COMMAND_V
+    assert not settings_path.with_suffix(".json.tmp").exists()
+
+
+def test_save_selected_model_does_not_add_default_settings(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    settings_path = config_dir / "settings.json"
+    settings_path.write_text(
+        json.dumps({"normalize_numbers": False}),
+        encoding="utf-8",
+    )
+
+    SettingsRepository(config_dir).save_selected_model(ModelId.ACCURATE)
+
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+        "normalize_numbers": False,
+        "selected_model": ModelId.ACCURATE.value,
+    }
+
+
+def test_save_selected_model_leaves_portable_settings_unchanged_when_local_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    settings_path = config_dir / "settings.json"
+    original_content = '{"selected_model": "qwen3-asr-0.6b-fp16"}\n'
+    settings_path.write_text(original_content, encoding="utf-8")
+    home_dir = tmp_path / "home"
+    local_config_dir = home_dir / ".vim2"
+    local_config_dir.mkdir(parents=True)
+    local_settings_path = local_config_dir / "settings.local.json"
+    local_settings_path.write_text(
+        json.dumps(
+            {
+                "normalize_numbers": False,
+                "selected_model": ModelId.CPU.value,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home_dir))
+
+    repository = SettingsRepository(config_dir)
+    repository.save_selected_model(ModelId.ACCURATE)
+
+    assert settings_path.read_text(encoding="utf-8") == original_content
+    assert json.loads(local_settings_path.read_text(encoding="utf-8")) == {
+        "normalize_numbers": False,
+        "selected_model": ModelId.ACCURATE.value,
+    }
+    assert repository.load().selected_model is ModelId.ACCURATE
+
+
+def test_local_settings_in_home_directory_override_portable_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(
+        json.dumps(
+            {
+                "max_recording_seconds": 45,
+                "normalize_numbers": True,
+                "selected_model": ModelId.FAST.value,
+            }
+        ),
+        encoding="utf-8",
+    )
+    home_dir = tmp_path / "home"
+    local_config_dir = home_dir / ".vim2"
+    local_config_dir.mkdir(parents=True)
+    (local_config_dir / "settings.local.json").write_text(
+        json.dumps(
+            {
+                "normalize_numbers": False,
+                "selected_model": ModelId.ACCURATE.value,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home_dir))
+
+    settings = SettingsRepository(config_dir).load()
+
+    assert settings.max_recording_seconds == 45
+    assert settings.normalize_numbers is False
+    assert settings.selected_model is ModelId.ACCURATE
 
 
 def test_invalid_number_normalization_setting_is_reported(
@@ -320,6 +467,21 @@ def test_invalid_preview_interval_is_reported(
     )
 
     with pytest.raises(ValueError, match="preview_interval_ms"):
+        SettingsRepository(config_dir).load()
+
+
+@pytest.mark.parametrize("seconds", [0, 31, 8.0, "8"])
+def test_invalid_preview_window_is_reported(
+    tmp_path: Path, seconds: object
+) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(
+        json.dumps({"preview_window_seconds": seconds}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="preview_window_seconds"):
         SettingsRepository(config_dir).load()
 
 

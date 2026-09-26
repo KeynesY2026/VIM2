@@ -58,7 +58,7 @@ nvidia-smi
 1. 获取 VIM2 发布包或项目目录。
 2. 如果是 ZIP，右键选择 **全部解压缩**，不要直接在压缩包中运行。
 3. 将文件夹放在固定位置，例如 `D:\Apps\VIM2`。
-4. 确认根目录有 `Start.cmd`、`start.bat`、`requirements.lock`、`app` 和 `config`。
+4. 确认根目录有 `Start.cmd`、`start.ps1`、`requirements.lock`、`app` 和 `config`。
 5. 在资源管理器中打开 VIM2 根目录，点击地址栏，输入 `powershell` 后按 Enter。
 
 后续命令都在这个 PowerShell 窗口中执行。
@@ -156,7 +156,8 @@ python -c "from huggingface_hub import snapshot_download; snapshot_download(repo
 确保配置中选择的模型已经下载，然后执行：
 
 ```powershell
-.\start.bat --check
+$env:PYTHONPATH = "$PWD\app"
+python -m vim2 --check
 ```
 
 成功时显示 `VIM2 preflight check passed.`。失败时会列出缺少的依赖或模型文件，按提示修复后重新检查。
@@ -173,7 +174,7 @@ python -c "from huggingface_hub import snapshot_download; snapshot_download(repo
 
 ## 9. 常见问题
 
-- **双击后没有反应：** 运行 `start.bat` 查看错误，或打开 `runtime\vim2.log`。
+- **双击后没有反应：** 打开 `runtime\vim2.log`，或重新执行“检查安装”中的命令查看错误。
 - **Model is incomplete：** 模型目录、层级不正确或下载未完成；重点检查是否多套一层同名目录。
 - **CUDA unavailable：** 执行 `nvidia-smi` 和 `python -c "import torch; print(torch.cuda.is_available())"`，更新驱动并重启；无 NVIDIA 显卡请改用 CPU 模型。
 - **Hugging Face 下载失败：** 重新运行同一命令会复用已完成文件。也可在另一台联网电脑下载完整模型目录后复制到 `.models`。

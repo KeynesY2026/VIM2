@@ -234,6 +234,50 @@ def test_cpu_model_transcribes_in_memory_audio(tmp_path: Path) -> None:
     assert accepted is samples
 
 
+def test_cpu_cancellation_after_waveform_skips_decode(tmp_path: Path) -> None:
+    sherpa = FakeSherpaModule()
+    recognizer = QwenRecognizer(
+        AppPaths.from_root(tmp_path), sherpa_module=sherpa
+    )
+    recognizer.load(ModelId.CPU)
+    cancel_event = threading.Event()
+    backend = sherpa.OfflineRecognizer.recognizers[0]
+    stream = backend.create_stream()
+    original_accept = stream.accept_waveform
+
+    def cancel_after_accept(sample_rate, samples) -> None:
+        original_accept(sample_rate, samples)
+        cancel_event.set()
+
+    stream.accept_waveform = cancel_after_accept
+    backend.create_stream = lambda: stream
+
+    with pytest.raises(TranscriptionCancelled):
+        recognizer.transcribe(
+            AudioArtifact(np.zeros(16_000, dtype=np.float32), 16_000),
+            ModelId.CPU,
+            cancel_event=cancel_event,
+        )
+
+    assert backend.decoded == []
+
+
+def test_cpu_transcription_logs_completion(tmp_path: Path, caplog) -> None:
+    sherpa = FakeSherpaModule()
+    recognizer = QwenRecognizer(
+        AppPaths.from_root(tmp_path), sherpa_module=sherpa
+    )
+    recognizer.load(ModelId.CPU)
+
+    with caplog.at_level("INFO", logger="vim2.recognizer"):
+        recognizer.transcribe(
+            AudioArtifact(np.zeros(1, dtype=np.float32), 16_000),
+            ModelId.CPU,
+        )
+
+    assert "Transcription completed with model" in caplog.text
+
+
 def test_unload_cpu_model_does_not_touch_cuda(tmp_path: Path) -> None:
     torch = FakeTorch()
     recognizer = QwenRecognizer(

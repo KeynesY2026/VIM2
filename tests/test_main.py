@@ -16,6 +16,13 @@ def _use_windows_policy(monkeypatch) -> None:
     monkeypatch.setattr(main_module, "select_platform_profile", lambda: profile)
 
 
+@pytest.fixture(autouse=True)
+def isolate_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home_dir))
+
+
 def _create_minimal_model(root: Path) -> None:
     model_dir = root / ".models" / MODEL_SPECS[ModelId.FAST].directory_name
     model_dir.mkdir(parents=True)

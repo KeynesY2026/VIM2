@@ -116,7 +116,10 @@ class FakeRecorder:
         self.seal_calls += 1
         self.started = False
 
-    def snapshot(self) -> AudioArtifact:
+    def snapshot(
+        self, max_seconds: int | None = None
+    ) -> AudioArtifact:
+        del max_seconds
         return AudioArtifact(np.zeros(8_000, dtype=np.float32), 16_000)
 
     def cancel(self) -> None:
@@ -138,6 +141,7 @@ class FakeSettingsRepository:
     def __init__(self) -> None:
         self.saved: list[Settings] = []
         self.shortcut_updates: list[MacPasteShortcut] = []
+        self.saved_models: list[ModelId] = []
 
     def save(self, settings: Settings) -> None:
         self.saved.append(settings)
@@ -146,6 +150,9 @@ class FakeSettingsRepository:
         self, shortcut: MacPasteShortcut
     ) -> None:
         self.shortcut_updates.append(shortcut)
+
+    def save_selected_model(self, model_id: ModelId) -> None:
+        self.saved_models.append(model_id)
 
 
 class FakeView:
@@ -261,7 +268,8 @@ def test_cross_backend_model_switch_restarts_without_loading_both_runtimes(
     controller.switch_model(ModelId.FAST)
 
     assert recognizer.switched == []
-    assert repository.saved[-1].selected_model is ModelId.FAST
+    assert repository.saved_models == [ModelId.FAST]
+    assert repository.saved == []
     assert restart_calls == [True]
 
 
@@ -317,6 +325,24 @@ def test_hotword_reload_is_ignored_during_recording(tmp_path: Path) -> None:
     controller.reload_hotwords()
 
     assert recognizer.reload_calls == 0
+
+
+def test_hotword_file_change_reloads_when_recording_returns_to_ready(
+    tmp_path: Path,
+) -> None:
+    controller, recognizer, recorder, _, view, _ = _controller(tmp_path, [])
+    controller.start()
+    controller.toggle_recording()
+
+    controller.hotwords_file_changed()
+
+    assert recognizer.reload_calls == 0
+
+    controller.cancel()
+
+    assert not recorder.started
+    assert recognizer.reload_calls == 1
+    assert view.infos == ["已自动加载 2 个热词。"]
 
 
 def test_failed_hotword_reload_reports_previous_snapshot_is_retained(
@@ -403,7 +429,8 @@ def test_model_switch_persists_only_after_success(tmp_path: Path) -> None:
     assert recognizer.switched == [ModelId.ACCURATE]
     switching_index = view.states.index(AppState.MODEL_SWITCHING)
     assert view.rendered_models[switching_index] is ModelId.ACCURATE
-    assert repository.saved[-1].selected_model is ModelId.ACCURATE
+    assert repository.saved_models == [ModelId.ACCURATE]
+    assert repository.saved == []
     assert controller.state is AppState.READY
 
 
@@ -648,7 +675,7 @@ def test_stop_requested_before_preview_worker_starts_is_serialized(
     assert controller.state is AppState.READY
 
 
-def test_busy_preview_keeps_only_one_latest_follow_up(tmp_path: Path) -> None:
+def test_busy_preview_waits_for_next_timer_tick(tmp_path: Path) -> None:
     controller, recognizer, recorder, paster, view, repository = _controller(
         tmp_path, ["first", "latest"]
     )
@@ -676,8 +703,10 @@ def test_busy_preview_keeps_only_one_latest_follow_up(tmp_path: Path) -> None:
     assert len(runner.tasks) == 1
     runner.complete_next()
     assert view.previews == ["first"]
-    assert len(runner.tasks) == 1
+    assert runner.tasks == []
 
+    controller.request_preview()
+    assert len(runner.tasks) == 1
     runner.complete_next()
 
     assert recognizer.transcribe_calls == 2

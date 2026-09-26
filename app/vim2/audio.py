@@ -12,10 +12,15 @@ class AudioArtifact:
     samples: np.ndarray
     sample_rate: int
     warnings: tuple[str, ...] = ()
+    start_frame: int = 0
 
     @property
     def frame_count(self) -> int:
         return len(self.samples)
+
+    @property
+    def end_frame(self) -> int:
+        return self.start_frame + self.frame_count
 
     @property
     def duration_seconds(self) -> float:
@@ -37,6 +42,7 @@ class AudioRecorder:
         self._sample_rate = sample_rate
         self._stream: Any | None = None
         self._chunks: list[np.ndarray] = []
+        self._captured_frames = 0
         self._status_errors: list[str] = []
         self._lock = threading.Lock()
         self._accepting_audio = False
@@ -46,6 +52,7 @@ class AudioRecorder:
         if self._stream is not None or self._sealed:
             raise RuntimeError("A recording is already in progress")
         self._chunks = []
+        self._captured_frames = 0
         self._status_errors = []
         self._accepting_audio = True
         stream = None
@@ -90,6 +97,7 @@ class AudioRecorder:
             if status:
                 self._status_errors.append(str(status))
             self._chunks.append(chunk)
+            self._captured_frames += len(chunk)
 
     def seal(self) -> None:
         if self._stream is None:
@@ -116,19 +124,43 @@ class AudioRecorder:
             chunks = list(self._chunks)
             warnings = tuple(self._status_errors)
             self._chunks = []
+            self._captured_frames = 0
             self._status_errors = []
             self._sealed = False
 
         samples = self._join_chunks(chunks)
         return AudioArtifact(samples, self._sample_rate, warnings)
 
-    def snapshot(self) -> AudioArtifact:
+    def snapshot(self, max_seconds: int | None = None) -> AudioArtifact:
         if self._stream is None:
             raise RuntimeError("No recording is in progress")
+        if max_seconds is not None and max_seconds <= 0:
+            raise ValueError("max_seconds must be positive")
         with self._lock:
-            chunks = list(self._chunks)
+            end_frame = self._captured_frames
+            if max_seconds is None:
+                chunks = list(self._chunks)
+                requested_frames = end_frame
+            else:
+                requested_frames = min(
+                    end_frame, max_seconds * self._sample_rate
+                )
+                chunks = []
+                selected_frames = 0
+                for chunk in reversed(self._chunks):
+                    chunks.append(chunk)
+                    selected_frames += len(chunk)
+                    if selected_frames >= requested_frames:
+                        break
+                chunks.reverse()
         samples = self._join_chunks(chunks)
-        return AudioArtifact(samples, self._sample_rate)
+        if len(samples) > requested_frames:
+            samples = samples[-requested_frames:]
+        return AudioArtifact(
+            samples,
+            self._sample_rate,
+            start_frame=end_frame - len(samples),
+        )
 
     @staticmethod
     def _join_chunks(chunks: list[np.ndarray]) -> np.ndarray:
@@ -150,6 +182,7 @@ class AudioRecorder:
             samples=artifact.samples[start_frame:],
             sample_rate=artifact.sample_rate,
             warnings=artifact.warnings,
+            start_frame=artifact.start_frame + start_frame,
         )
 
     def cancel(self) -> None:
@@ -162,6 +195,7 @@ class AudioRecorder:
             stream.close()
         with self._lock:
             self._chunks = []
+            self._captured_frames = 0
             self._status_errors = []
             self._sealed = False
 

@@ -33,17 +33,6 @@ CPU_MODEL_HASHES = {
 }
 
 
-def test_launcher_uses_global_python_without_bundled_environment() -> None:
-    launcher = (ROOT / "start.bat").read_text(encoding="utf-8")
-
-    assert 'cd /d "%~dp0"' in launcher
-    assert "HF_HUB_OFFLINE=1" in launcher
-    assert "runtime\\site-packages" not in launcher
-    assert ".venv" not in launcher
-    assert "pip install" not in launcher.lower()
-    assert "python -m vim2 %*" in launcher
-
-
 def test_windowed_launcher_uses_hidden_windows_powershell() -> None:
     launcher = (ROOT / "Start.cmd").read_text(encoding="utf-8")
     script = (ROOT / "start.ps1").read_text(encoding="utf-8")

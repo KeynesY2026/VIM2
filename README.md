@@ -71,12 +71,13 @@ sherpa-onnx/PyObjC 原生模块，以及已拒绝的辅助功能、输入监控�
 
 ## 启动
 
-完成安装后，双击 `Start.cmd`。它通过隐藏的 Windows PowerShell 启动
+Windows 完成安装后，双击 `Start.cmd`。它通过隐藏的 Windows PowerShell 启动
 `pythonw.exe`，桌面不会保留命令行窗口。等待任务栏右下角的 VIM2 托盘图标变为
-绿色。双击后没有反应时，运行 `start.bat` 查看错误。安装检查命令为：
+绿色。双击后没有反应时，查看 `runtime/vim2.log`。安装检查命令为：
 
 ```powershell
-.\start.bat --check
+$env:PYTHONPATH = "$PWD\app"
+python -m vim2 --check
 ```
 
 仓库当前检入的 `config/settings.json` 选择 Qwen3-ASR 0.6B INT8 CPU；Windows
@@ -84,9 +85,10 @@ sherpa-onnx/PyObjC 原生模块，以及已拒绝的辅助功能、输入监控�
 Windows 原行为。默认全局热键是右 Alt；再次按下停止录音，录音期间按 Esc 取消。
 
 实时识别默认每秒发起一次预览，间隔可在 `config/settings.json` 中通过
-`preview_interval_ms` 调整为 250–1000 毫秒；前一次推理未完成时只保留一个最新
-待处理请求，完成后立即识别最新音频，不处理已经过期的中间快照。每次推理最多处理
-最近 12 秒音频，并在存在可靠句子锚点时与稳定前缀合并，避免长录音让预览越来越慢。
+`preview_interval_ms` 调整为 250–1000 毫秒；前一次推理未完成时不排队，完成后
+等待下一次定时请求，不立即连续补跑。`preview_window_seconds` 控制每次只复制并
+识别最近的音频（默认 8 秒，可设为 1–30 秒），在存在可靠句子锚点时与稳定前缀
+合并，避免长录音让预览越来越慢。
 多句预览会立即确认最后一个完整句之前的内容；只有一个完整句时，仍要求连续三次
 预览一致。
 
@@ -132,11 +134,16 @@ Qwen-ASR、BitsAndBytes 或 CUDA，不改变原有两个 GPU 模式。首次使�
 
 ## 热词与配置
 
-在 `config/hotwords.txt` 中每行填写一个人名、产品名或专业术语，然后从托盘选择
-“重新加载热词”。热词会提高相关词出现的概率，但不会强制替换识别结果。
+在 `config/hotwords.txt` 中每行填写一个人名、产品名或专业术语。Windows 上从
+托盘选择“打开热词文件”使用记事本编辑；关闭记事本进程后，VIM2 比较打开前后
+的文件修改时间，仅在发生变化时自动加载新热词。编辑期间不会刷新；如果关闭时
+正在录音或识别，会在恢复就绪后加载。macOS 上此入口使用系统默认关联程序打开，
+编辑完成后请从托盘选择“重新加载热词”；该手动入口在 Windows 上也可使用。
+热词会提高相关词出现的概率，但不会强制替换识别结果。
 
-- `config/settings.json`：模型、最长录音时间、实时预览、尾段重叠、数字规范化，
-  以及 macOS 粘贴快捷键。
+- `config/settings.json`：模型、最长录音时间、实时预览（`preview_window_seconds`
+  默认 8 秒）、尾段重叠（`tail_overlap_seconds` 默认 5 秒）、数字规范化以及
+  macOS 粘贴快捷键。预览窗口与稳定句子边界前的音频重叠用途不同。
 - `config/hotkey.conf`：全局热键，默认是 `RightAlt`；支持单键或以 `+` 分隔的
   组合键。
 - `config/hotwords.txt`：一行一个热词或短语。
@@ -149,6 +156,7 @@ Qwen-ASR、BitsAndBytes 或 CUDA，不改变原有两个 GPU 模式。首次使�
   "max_recording_seconds": 300,
   "normalize_numbers": true,
   "preview_interval_ms": 1000,
+  "preview_window_seconds": 8,
   "selected_model": "qwen3-asr-0.6b-int8-cpu",
   "tail_overlap_seconds": 5
 }
@@ -161,8 +169,9 @@ Qwen-ASR、BitsAndBytes 或 CUDA，不改变原有两个 GPU 模式。首次使�
 - `qwen3-asr-1.7b-int8`（ACCURATE/高精度）
 
 `macos_paste_shortcut` 的有效值为 `command-v`（缺失时默认，本机 Mac）和
-`control-v`（Windows / 远程桌面）；其他值会在启动时作为无效配置明确拒绝。该
-字段不改变 Windows 本机固定的 Ctrl+V 粘贴行为。`normalize_numbers` 默认为
+`control-v`（Windows / 远程桌面）；其他值会在启动时作为无效配置明确拒绝。若
+`~/.vim2/settings.local.json` 覆盖该字段，托盘切换会拒绝并提示先删除该本地覆盖，
+避免重启后恢复旧值。该字段不改变 Windows 本机固定的 Ctrl+V 粘贴行为。`normalize_numbers` 默认为
 `true`，可单独关闭中英文口述数字规范化。默认最长录音时间为 300 秒。
 
 ## 发布准备
@@ -185,7 +194,7 @@ python -m pip install -r .\requirements.lock `
   --extra-index-url https://download.pytorch.org/whl/cu128
 ```
 
-该安装不是 `Start.cmd`、`start.bat` 或应用启动流程的一部分。
+该安装不是 `Start.cmd` 或应用启动流程的一部分。
 
 ## A/B 性能测试
 
