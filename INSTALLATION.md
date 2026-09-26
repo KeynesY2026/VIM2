@@ -1,8 +1,46 @@
-# VIM2 Windows 安装手册
+# VIM2 0.1.0 安装版内测 / 源码 Portable 手册
 
-本手册面向第一次安装 Python 程序的用户，请按顺序操作。
+## 完全自包含安装版（未签名内测）
 
-> 当前版本支持 Windows 10/11 x64。macOS 支持正在路上。
+macOS Apple Silicon 原生 arm64：`VIM2-0.1.0-macos-arm64.dmg`，打开后将
+`VIM2.app` 拖到 Applications 链接；内含原生 Python、PySide6、sherpa-onnx、
+依赖和**仅** `qwen3-asr-0.6b-int8-cpu` 模型。不必安装 Python 或下载模型。
+该 app 为 PyInstaller ad-hoc 签名，**没有 Developer ID 签名、没有公证**；
+Gatekeeper 可能阻止首次启动，内测人员应核对来源和 SHA-256 后通过系统设置
+“隐私与安全性 → 仍要打开”有意识地授权，不能以此替代正式签名与公证。
+辅助功能、输入监控、麦克风权限须为实际安装位置的 app 单独授予。
+
+Windows 10/11 x64：`VIM2-0.1.0-windows-x64-Setup.exe`，为未签名、
+最低权限的当前用户安装器，安装到 `%LOCALAPPDATA%\\Programs\\VIM2`，
+建立开始菜单快捷方式；无须单独安装 Python/CUDA/PyTorch/模型。SmartScreen
+可能警告未签名程序，内测人员先核验 SHA-256 与来源，再决定是否运行。
+这些产物目前**仅供内部测试**，Windows Setup.exe 须待 Windows Actions
+实际构建及真机验证，不能把 macOS 构建视作 Windows 已验证。
+
+两端模型只读，用户配置/热词/日志/锁/临时音频均与安装目录分离：
+macOS `~/Library/Application Support/VIM2/{config,runtime,temp}`；Windows
+`%LOCALAPPDATA%\\VIM2\\{config,runtime,temp}`。首次启动仅补齐缺失的
+`settings.json`、`hotkey.conf`、`hotwords.txt`，不覆盖已有数据；安装包仅含通用
+`hotwords.template.txt`，绝不打包源码目录内被忽略的个人热词文件；卸载程序
+不自动删除用户目录。诊断检查可用 `--check --skip-runtime-check --data-root
+<临时空目录>` 隔离用户数据，**不启动 GUI 或注入按键**，不等同真机验收。
+源码与 `--root` Portable 仍采用旧的仓库根目录布局；下文只适用于源码模式，
+不适用于安装版。
+
+**对外分发阻断条件：** CPU 模型系第三方转换版本，当前 Hugging Face model
+card 缺失 license metadata，必须独立核实来源、上游及转换权利和许可证；
+还需完成 macOS 真机 TCC/粘贴及 Windows 原生/远程桌面验收、发行签名/公证评估。
+安装版构建只接受固定镜像
+`csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25` revision
+`68818b2313fe77bd06f6a7c5068ff3ef59d02b8a` 的六个文件，并按
+`release-files.sha256.json` 校验。下文源码 Portable 的 ModelScope 页面
+`https://modelscope.cn/models/zengshuishui/Qwen3-ASR-onnx` 只是人工下载入口，
+不作为安装版输入；两处都是第三方转换，许可尚未在 HF card 中标明。
+首次写入用户文件时先写临时文件并 fsync，再原子替换；失败不保留半截文件，可重试。
+
+## 以下为源码 Portable 安装说明（不是安装版依赖）
+
+本手册下文面向第一次安装 Python 源码的用户，请按顺序操作。
 
 ## 1. 选择模型
 
@@ -96,7 +134,12 @@ New-Item -ItemType Directory -Force .\.models | Out-Null
 
 ### A. 默认 0.6B INT8 CPU 模型
 
-这是第三方转换的 ONNX INT8 模型，并非 Qwen 官方预量化 checkpoint。来源：[zengshuishui/Qwen3-ASR-onnx](https://modelscope.cn/models/zengshuishui/Qwen3-ASR-onnx/files)。
+这是第三方转换的 ONNX INT8 模型，并非 Qwen 官方预量化 checkpoint。源码
+Portable 可从 ModelScope 人工下载：[zengshuishui/Qwen3-ASR-onnx](https://modelscope.cn/models/zengshuishui/Qwen3-ASR-onnx/files)。
+安装版不从该页面下载，只使用固定 revision
+`68818b2313fe77bd06f6a7c5068ff3ef59d02b8a` 的 Hugging Face 镜像
+`csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25`，并核对
+`release-files.sha256.json`。两处文件均须独立核实来源与许可证。
 
 1. 创建模型目录：
 

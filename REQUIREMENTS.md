@@ -1,5 +1,33 @@
 # VIM2 本地语音输入工具需求文档
 
+## 0. 0.1.0 自包含安装版（覆盖下文旧 Portable-only 限制）
+
+用户确认的 0.1.0 安装版仅供未签名内部测试：macOS 原生 Apple Silicon
+`VIM2.app` + 含 Applications 链接的 `.dmg`；Windows 10/11 x64 用
+GitHub Actions `windows-2022` 构建 Inno Setup 最低权限的当前用户 `Setup.exe`。
+两端内置 Python 与平台依赖、**仅** Qwen3-ASR 0.6B INT8 CPU 模型；不要求
+安装 Python、CUDA 或联网运行。安装程序只读数据包含固定六个模型文件和默认配置；
+用户写入全部到 macOS `~/Library/Application Support/VIM2` 或 Windows
+`%LOCALAPPDATA%\\VIM2` 的 config/runtime/temp。首次启动仅补缺、不覆写
+现有设置和热词；锁、日志、编辑器与音频临时文件均指向用户目录。
+源码运行及显式 `--root` 仍保持原 Portable 行为。冻结自重启须调用可执行文件，
+不得用 `python -m vim2`；Windows 安装包不引入 GPU 依赖。
+
+自包含打包使用 `packaging/vim2.spec`、`requirements-build.lock`、
+`requirements-windows-cpu.lock`、`tools/build-macos-installer.sh`、
+`tools/build-windows-installer.ps1` 和 `packaging/vim2.iss`，输出 `.sha256`。
+没有品牌图标则保留默认图标，不虚构资产。macOS ad-hoc 签名不代表 Developer ID
+或公证；Windows 未签名会遇到 SmartScreen；用户须自行核验 hash 和来源。
+**对外分发前阻断：** 第三方 CPU 转换模型 HF card 当前缺 license metadata，
+须核实模型来源/权利及许可证；另需两端真机安装、TCC/热键/剪贴板/音频和远程
+Windows 粘贴验收。安装版只打包固定 Hugging Face 镜像
+`csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25` revision
+`68818b2313fe77bd06f6a7c5068ff3ef59d02b8a`；源码手册的 ModelScope
+`zengshuishui/Qwen3-ASR-onnx` 只是同一转换的人工下载入口。首次用户文件必须
+原子创建：临时文件写完并 fsync 后再替换，失败不得留下半截设置，且可重试。
+下文早期三模型、GPU、Portable-only 与“不生成 EXE”描述
+仅保留为源码 Portable 的历史要求，不再限制此安装版。
+
 ## 1. 背景与目标
 
 VIM2 是 VIM 第一版的后续版本。产品继续提供 Windows 全局语音输入能力，并将识别模型升级为官方 Qwen3-ASR 模型。

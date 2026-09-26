@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -50,7 +51,11 @@ class SettingsRepository:
     def __init__(self, config_dir: Path) -> None:
         self._config_dir = config_dir
         self._settings_path = config_dir / "settings.json"
-        self._local_settings_path = Path.home() / ".vim2" / "settings.local.json"
+        self._local_settings_path = (
+            config_dir / "settings.local.json"
+            if getattr(sys, "frozen", False)
+            else Path.home() / ".vim2" / "settings.local.json"
+        )
         self._hotkey_path = config_dir / "hotkey.conf"
 
     def load(self) -> Settings:

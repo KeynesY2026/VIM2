@@ -89,6 +89,8 @@ def select_platform_profile(
     selected_system = (system_name or sys.platform).lower()
     selected_machine = (machine or platform.machine()).lower()
     if selected_system.startswith("win"):
+        if getattr(sys, "frozen", False):
+            return PlatformProfile(name="windows", supported_models=(ModelId.CPU,))
         return _WINDOWS_PROFILE
     if selected_system == "darwin":
         errors: tuple[str, ...] = ()

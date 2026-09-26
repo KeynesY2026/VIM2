@@ -3,6 +3,39 @@
     "name": "VIM2",
     "version": "0.1.0"
   },
+  "installers": {
+    "status": "unsigned internal test only",
+    "model": "qwen3-asr-0.6b-int8-cpu",
+    "macos": "VIM2-0.1.0-macos-arm64.dmg",
+    "windows": "VIM2-0.1.0-windows-x64-Setup.exe",
+    "model_license_review_required": true,
+    "sbom": "scopes.installer"
+  },
+  "runtime_scope": "portable",
+  "scopes": {
+    "portable": {
+      "description": "源码与 Portable 布局，包含可选 NVIDIA CUDA GPU 模型",
+      "models": [
+        "qwen3-asr-0.6b-int8-cpu",
+        "qwen3-asr-0.6b-fp16",
+        "qwen3-asr-1.7b-int8"
+      ]
+    },
+    "installer": {
+      "description": "未签名内测安装版，仅包含 CPU 模型",
+      "model": "qwen3-asr-0.6b-int8-cpu",
+      "models": [
+        "qwen3-asr-0.6b-int8-cpu"
+      ],
+      "excluded_from_installer": [
+        "torch",
+        "cuda",
+        "qwen-asr",
+        "transformers",
+        "bitsandbytes"
+      ]
+    }
+  },
   "models": {
     "qwen3-asr-0.6b-int8-cpu": {
       "directory": ".models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",

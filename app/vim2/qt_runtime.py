@@ -180,17 +180,14 @@ def _create_hotword_editor(
 
 
 def _restart_process(paths: AppPaths) -> None:
-    os.execv(
-        sys.executable,
-        [
-            sys.executable,
-            "-m",
-            "vim2",
-            "--root",
-            str(paths.root),
-            "--windowed",
-        ],
-    )
+    if getattr(sys, "frozen", False):
+        argv = [sys.executable, "--windowed"]
+        # Preserve an explicit test data root; never relaunch into the real profile.
+        if paths.config_dir != AppPaths.for_launch().config_dir:
+            argv.extend(["--data-root", str(paths.config_dir.parent)])
+    else:
+        argv = [sys.executable, "-m", "vim2", "--root", str(paths.root), "--windowed"]
+    os.execv(sys.executable, argv)
 
 
 def _create_macos_paste_shortcut_selection(

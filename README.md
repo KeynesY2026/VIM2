@@ -7,10 +7,39 @@ VIM2 是以 Windows 10/11 x64 为主、并逐步支持 macOS Apple Silicon 的�
 电脑安装一次，连接不同远程机器时无需重复安装模型。语音识别完全在本机完成，音频
 和文字不上传，也没有云服务费用。
 
-> Windows 10/11 x64 是当前正式支持平台；macOS Apple Silicon 当前为有界的 CPU
-> Phase 1 MVP，限制和未验证项见下文。
+> 0.1.0 已生成 macOS Apple Silicon 自包含 `.app` + `.dmg` 内测产物；Windows
+> 自包含 CPU `Setup.exe` 由 GitHub Actions 构建（待真实 Windows 构建/验收）。
+> 均未获得 Developer ID/发行代码签名，**仅供内部测试，不应对外分发**。
+> 旧的 CUDA/多模型内容如下为源码 Portable 路径，不代表安装版能力。
 
 [第一次使用：查看完整安装手册](INSTALLATION.md)
+
+### 0.1.0 自包含安装版构建与验收边界
+
+- 安装版仅带 Qwen3-ASR 0.6B INT8 CPU 的六个 sherpa-onnx 必要文件；
+  Windows/macOS 不需要 Python、模型下载或 CUDA。程序/模型在安装包中只读；
+  macOS 配置/日志/锁/临时音频位于 `~/Library/Application Support/VIM2`，
+  Windows 位于 `%LOCALAPPDATA%\\VIM2`。初次启动仅复制缺失默认文件。
+- 原生 arm64 Python 3.11 环境运行 `bash tools/build-macos-installer.sh`，
+  得到 `dist/installers/VIM2-0.1.0-macos-arm64.dmg` 及 `.sha256`。
+  ad-hoc 签名不等于 Developer ID 或公证；先核验 hash，内测时手动处理
+  Gatekeeper 与权限要求，参见 [安装说明](INSTALLATION.md)。
+- Windows 在 `feature/macos-apple-silicon-mvp` push（修改 workflow paths）
+  或 `workflow_dispatch` 时由 `windows-2022` / Python 3.11 x64 的
+  `.github/workflows/build-installers.yml` 构建 Inno Setup 当前用户安装器。
+  可用 `gh workflow run build-installers.yml --ref feature/macos-apple-silicon-mvp`
+  手动触发；运行结束后 `gh run list --workflow build-installers.yml`，
+  选取 run ID 后执行 `gh run download $RUN_ID -n VIM2-0.1.0-windows-x64-unsigned -D ./installer-download`，
+  在下载目录用 `Get-FileHash .\\VIM2-0.1.0-windows-x64-Setup.exe -Algorithm SHA256`
+  比对 `.sha256`。**本机 macOS 不能验证 Windows 二进制。**
+- 安装版 CPU 模型只使用 Hugging Face 镜像
+  `csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25`，固定 revision
+  `68818b2313fe77bd06f6a7c5068ff3ef59d02b8a`，并按 `release-files.sha256.json`
+  校验。源码 Portable 手册中的 ModelScope 页面
+  `zengshuishui/Qwen3-ASR-onnx` 是同一第三方转换的人工下载入口，
+  不是安装版构建输入。该 HF card 目前缺 license metadata，
+  对外分发前必须核实转换模型来源/许可，并完成两端真机粘贴、音频与安装的正式验收。
+
 
 ## 为什么选择 VIM2
 
@@ -66,8 +95,8 @@ sherpa-onnx/PyObjC 原生模块，以及已拒绝的辅助功能、输入监控�
 访问仍可能由 macOS 弹出授权请求。
 
 本阶段尚未在真实 M1 上验证模型加载/识别速度与准确率、16 kHz 音频设备行为、
-完整 TCC 授权流程、事件注入兼容性、arm64 wheel 安装，也未完成 `.app` 签名、
-公证或发布布局。因此不能把本节视为正式 macOS 发布支持声明。
+完整 TCC 授权流程、事件注入兼容性、arm64 wheel 安装，也未完成 Developer ID
+签名、公证或正式验收。因此不能把本节视为正式 macOS 发布支持声明。
 
 ## 启动
 

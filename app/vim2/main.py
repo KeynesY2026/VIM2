@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import logging
 import sys
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Sequence
 from vim2.config import SettingsRepository
 from vim2.diagnostics import configure_runtime_logging
 from vim2.paths import AppPaths
+from vim2.models import ModelId
 from vim2.platform_services import (
     create_platform_services,
     select_platform_profile,
@@ -22,9 +24,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--root",
         type=Path,
-        default=Path(__file__).resolve().parents[2],
+        default=None,
         help=argparse.SUPPRESS,
     )
+    parser.add_argument("--data-root", type=Path, help=argparse.SUPPRESS)
     parser.add_argument(
         "--check",
         action="store_true",
@@ -45,11 +48,33 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--import-smoke",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     return parser
 
 
 def _show_startup_message(message: str) -> None:
     show_startup_error(message)
+
+
+def _run_import_smoke(*, windowed: bool) -> int:
+    """Import frozen native modules without platform services, GUI, or TCC prompts."""
+    try:
+        for module in (
+            "sherpa_onnx",
+            "sounddevice",
+            "soundfile",
+            "PySide6.QtWidgets",
+        ):
+            importlib.import_module(module)
+    except (ImportError, OSError, RuntimeError) as exc:
+        _report_startup_error(str(exc), windowed=windowed)
+        return 1
+    print("VIM2 native import smoke passed.")
+    return 0
 
 
 def _report_startup_error(message: str, *, windowed: bool) -> None:
@@ -66,8 +91,25 @@ def _report_startup_error(message: str, *, windowed: bool) -> None:
 
 def run(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    paths = AppPaths.from_root(args.root)
-    configure_runtime_logging(paths)
+    if getattr(sys, "frozen", False) and args.root is not None:
+        _report_startup_error("Frozen builds do not accept --root", windowed=args.windowed)
+        return 1
+    if not getattr(sys, "frozen", False) and args.data_root is not None:
+        _report_startup_error("--data-root is for frozen builds only", windowed=args.windowed)
+        return 1
+    try:
+        paths = (
+            AppPaths.for_launch(data_root=args.data_root)
+            if getattr(sys, "frozen", False)
+            else AppPaths.from_root(args.root or Path(__file__).resolve().parents[2])
+        )
+        paths.initialize_user_data()
+        configure_runtime_logging(paths)
+    except OSError as exc:
+        _report_startup_error(f"VIM2 cannot initialize user data: {exc}", windowed=args.windowed)
+        return 1
+    if args.import_smoke:
+        return _run_import_smoke(windowed=args.windowed)
     logger = logging.getLogger(__name__)
     logger.info("VIM2 starting with Python %s", sys.version.split()[0])
     try:
@@ -116,6 +158,15 @@ def run(argv: Sequence[str] | None = None) -> int:
         return 1
 
     if args.check:
+        if not args.skip_runtime_check and settings.selected_model is ModelId.CPU:
+            try:
+                for module in ("sherpa_onnx", "sounddevice", "soundfile", "PySide6.QtWidgets"):
+                    importlib.import_module(module)
+            except (ImportError, OSError, RuntimeError) as exc:
+                _report_startup_error(
+                    f"VIM2 CPU runtime cannot be loaded: {exc}", windowed=args.windowed
+                )
+                return 1
         print("VIM2 preflight check passed.")
         return 0
 
