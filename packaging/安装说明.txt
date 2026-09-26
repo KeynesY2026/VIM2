@@ -1,0 +1,18 @@
+VIM2 0.1.0 macOS Apple Silicon 未签名内测安装说明
+
+请不要在这个磁盘镜像里直接双击 VIM2.app。镜像内启动不能代替安装，程序会提示后退出，也不会在镜像路径上请求系统权限。
+
+1. 将本磁盘镜像中的 VIM2.app 拖到 Applications（应用程序）文件夹，并等待约 1.1GB 复制完成。复制完成前不要打开。
+2. 复制完成后弹出此 DMG 磁盘镜像。
+3. 打开“应用程序”，对 VIM2.app 右键（或按住 Control 点击）并选择“打开”。这是未签名内测版本，首次可能需要在系统提示中确认打开。
+4. 在系统设置 → 隐私与安全性中，为已经放进应用程序的 VIM2 授予：
+   - 辅助功能
+   - 输入监控
+   - 麦克风
+5. 授权后完全退出并重新启动 VIM2。这些权限只对应用程序中的这份 app 生效。
+
+Gatekeeper 与 xattr 仅为受控内测的最后手段，本安装包不会自动执行。
+请先核验来源和 SHA-256。若系统阻止打开，使用系统设置 → 隐私与安全性 → 仍要打开。
+不要把清除隔离属性当作正常安装步骤。只有上述方法仍无法启动时，受控内测人员才可自行决定是否手动处理 xattr。VIM2 不会自动执行该操作。
+
+English: drag VIM2.app to Applications, wait until the about 1.1GB copy finishes, eject the DMG, then Control-click Open in Applications because this is an unsigned internal test. Grant Accessibility, Input Monitoring, and Microphone in System Settings, then restart. Gatekeeper and xattr are a last resort for controlled internal testing and are not run automatically.

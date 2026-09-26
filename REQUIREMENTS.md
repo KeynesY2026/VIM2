@@ -3,8 +3,11 @@
 ## 0. 0.1.0 自包含安装版（覆盖下文旧 Portable-only 限制）
 
 用户确认的 0.1.0 安装版仅供未签名内部测试：macOS 原生 Apple Silicon
-`VIM2.app` + 含 Applications 链接的 `.dmg`；Windows 10/11 x64 用
-GitHub Actions `windows-2022` 构建 Inno Setup 最低权限的当前用户 `Setup.exe`。
+`VIM2.app` + 含 Applications 链接的 `.dmg`；Windows 10/11 x64 原计划用
+GitHub Actions `windows-2022` 构建 Inno Setup 当前用户 `Setup.exe`，但用户已
+明确暂停并放弃本轮 Windows Actions / Setup 打包；本轮不生成或声称 Windows 产物。
+Windows workflow 不得保留自动 `push` 触发：向 macOS 分支 push 不会自动运行
+Windows job；只保留 `workflow_dispatch` 作为未来显式人工恢复入口，本轮不触发。
 两端内置 Python 与平台依赖、**仅** Qwen3-ASR 0.6B INT8 CPU 模型；不要求
 安装 Python、CUDA 或联网运行。安装程序只读数据包含固定六个模型文件和默认配置；
 用户写入全部到 macOS `~/Library/Application Support/VIM2` 或 Windows
@@ -12,6 +15,12 @@ GitHub Actions `windows-2022` 构建 Inno Setup 最低权限的当前用户 `Set
 现有设置和热词；锁、日志、编辑器与音频临时文件均指向用户目录。
 源码运行及显式 `--root` 仍保持原 Portable 行为。冻结自重启须调用可执行文件，
 不得用 `python -m vim2`；Windows 安装包不引入 GPU 依赖。
+macOS 普通双击启动默认显示错误对话框；从 `/Volumes/.../*.app` 或标准
+`/private/var/folders/.../AppTranslocation/<token>/d/.../*.app` 启动时只提示
+拖到 Applications、弹出镜像后再启动，不请求临时身份的 TCC。安装后的首次普通 GUI 启动若缺少
+辅助功能或输入监控，只能通过系统提示 API 请求并显示说明，不得绕过或代授予。
+麦克风仍走系统录音流程。`--check` 和 `--import-smoke` 不弹权限请求。DMG 根目录必须
+包含 UTF-8 `安装说明.txt`。
 
 自包含打包使用 `packaging/vim2.spec`、`requirements-build.lock`、
 `requirements-windows-cpu.lock`、`tools/build-macos-installer.sh`、

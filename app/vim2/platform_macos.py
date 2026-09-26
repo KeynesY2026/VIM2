@@ -38,6 +38,21 @@ _MACOS_MODIFIER_DEVICE_MASKS = {
     62: _NX_DEVICE_RIGHT_CONTROL_MASK,
 }
 
+GUI_PERMISSION_GUIDANCE = """VIM2 需要系统权限才能使用全局热键和粘贴。
+VIM2 needs system permissions for the global hotkey and paste.
+
+请在“系统设置 → 隐私与安全性”中为“应用程序”里的 VIM2 打开：
+Enable the installed VIM2 app in System Settings → Privacy & Security:
+- 辅助功能 / Accessibility
+- 输入监控 / Input Monitoring
+
+麦克风继续使用系统流程：开始录音时由系统请求，也可在同一页面授予麦克风 / Microphone。
+The microphone keeps using the system flow and is requested when recording starts.
+
+VIM2 不会绕过系统，也不会自行授予这些权限。授予后请完全退出并重新启动 VIM2。
+VIM2 does not bypass or grant these permissions. Quit and restart VIM2 after enabling them.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class MacTargetContext:
@@ -478,6 +493,7 @@ class PyObjCMacNativeApi:
             ) from exc
 
     def permission_errors(self) -> tuple[str, ...]:
+        """Query TCC state. This must not prompt; ``--check`` uses this path."""
         errors: list[str] = []
         try:
             accessibility_check = getattr(
@@ -536,6 +552,43 @@ class PyObjCMacNativeApi:
                 "launcher) in System Settings > Privacy & Security > Microphone."
             )
         return tuple(errors)
+
+    def prompt_accessibility(self) -> None:
+        """Ask macOS to show the Accessibility prompt. This does not grant access."""
+        prompt = getattr(
+            self._application_services, "AXIsProcessTrustedWithOptions", None
+        )
+        option_key = getattr(
+            self._application_services, "kAXTrustedCheckOptionPrompt", None
+        )
+        if prompt is None or option_key is None:
+            raise RuntimeError(
+                "Required macOS symbol "
+                "ApplicationServices.AXIsProcessTrustedWithOptions is unavailable"
+            )
+        try:
+            prompt({option_key: True})
+        except Exception as exc:
+            raise RuntimeError(
+                f"Cannot request macOS Accessibility access: {exc}"
+            ) from exc
+
+    def prompt_input_monitoring(self) -> bool:
+        """Call ``CGRequestListenEventAccess`` when the OS provides it.
+
+        Returns whether the official request symbol was invoked. A missing
+        symbol is not an error; this method never grants the permission itself.
+        """
+        request = getattr(self._quartz, "CGRequestListenEventAccess", None)
+        if request is None:
+            return False
+        try:
+            request()
+        except Exception as exc:
+            raise RuntimeError(
+                f"Cannot request macOS Input Monitoring access: {exc}"
+            ) from exc
+        return True
 
     def capture_target(self) -> MacTargetContext:
         try:
@@ -809,6 +862,35 @@ class MacOSPlatformServices:
                 f"Cannot complete the macOS native permission preflight: {exc}"
             ) from exc
 
+    def prepare_gui_permissions(self) -> str | None:
+        """Prompt for missing hotkey permissions, then explain them if still missing.
+
+        Microphone access stays on the existing system flow and is not requested
+        here. Already-granted permissions produce no prompt and no guidance.
+        """
+        errors = self._native.permission_errors()
+        missing_accessibility = any("Accessibility" in error for error in errors)
+        missing_input = any("Input Monitoring" in error for error in errors)
+        if not missing_accessibility and not missing_input:
+            return None
+        if missing_accessibility:
+            prompter = getattr(self._native, "prompt_accessibility", None)
+            if prompter is None:
+                raise RuntimeError("macOS Accessibility prompt is unavailable")
+            prompter()
+        if missing_input:
+            prompter = getattr(self._native, "prompt_input_monitoring", None)
+            if prompter is None:
+                raise RuntimeError("macOS Input Monitoring prompt is unavailable")
+            prompter()
+        refreshed = self._native.permission_errors()
+        if not any(
+            "Accessibility" in error or "Input Monitoring" in error
+            for error in refreshed
+        ):
+            return None
+        return GUI_PERMISSION_GUIDANCE
+
     @staticmethod
     def enable_desktop_features() -> None:
         return None
@@ -838,13 +920,39 @@ class MacOSPlatformServices:
         )
 
 
-def show_startup_error(message: str) -> None:
+def _alert_text(message: str, title: str | None) -> tuple[str, str]:
+    if title is not None:
+        return title, message
+    first, separator, rest = message.partition("\n")
+    if separator and rest.strip():
+        return first.strip(), rest.strip()
+    return "VIM2 cannot start", message
+
+
+def show_startup_error(message: str, *, title: str | None = None) -> None:
+    """Show a frontmost native alert after initializing and activating NSApplication."""
     try:
         appkit = importlib.import_module("AppKit")
+        application = appkit.NSApplication.sharedApplication()
+        policy = getattr(appkit, "NSApplicationActivationPolicyRegular", None)
+        if policy is not None and hasattr(application, "setActivationPolicy_"):
+            application.setActivationPolicy_(policy)
+        application.activateIgnoringOtherApps_(True)
+        heading, informative = _alert_text(message, title)
         alert = appkit.NSAlert.alloc().init()
-        alert.setMessageText_("VIM2 cannot start")
-        alert.setInformativeText_(message)
+        alert.setMessageText_(heading)
+        alert.setInformativeText_(informative)
         alert.setAlertStyle_(appkit.NSAlertStyleCritical)
+        window = alert.window() if hasattr(alert, "window") else None
+        level = getattr(
+            appkit,
+            "NSStatusWindowLevel",
+            getattr(appkit, "NSFloatingWindowLevel", None),
+        )
+        if window is not None and level is not None and hasattr(window, "setLevel_"):
+            window.setLevel_(level)
+        if window is not None and hasattr(window, "orderFrontRegardless"):
+            window.orderFrontRegardless()
         alert.runModal()
     except Exception as exc:
         raise RuntimeError(

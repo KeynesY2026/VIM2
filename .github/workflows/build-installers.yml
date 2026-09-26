@@ -1,21 +1,7 @@
 name: Windows CPU installer (internal test)
 on:
+  # Suspended: only an explicit future manual request may run the Windows job.
   workflow_dispatch:
-  push:
-    branches:
-      - feature/macos-apple-silicon-mvp
-    paths:
-      - '.github/workflows/build-installers.yml'
-      - 'app/**'
-      - 'config/**'
-      - 'packaging/**'
-      - 'tools/build-windows-installer.ps1'
-      - 'tools/download-cpu-model.py'
-      - 'tools/verify-installer-layout.py'
-      - 'requirements-windows-cpu.lock'
-      - 'requirements-build.lock'
-      - 'release-files.sha256.json'
-      - 'tests/**'
 # Model: csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25
 # Revision: 68818b2313fe77bd06f6a7c5068ff3ef59d02b8a
 permissions:

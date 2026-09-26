@@ -12,12 +12,14 @@ user_data=""
 stage=""
 staged_dmg=""
 mount_dir=""
+mount_data=""
 cleanup() {
   local status=$?
   if [[ -n "${mount_dir}" ]]; then
     hdiutil detach "${mount_dir}" >/dev/null 2>&1 || true
     rmdir "${mount_dir}" 2>/dev/null || true
   fi
+  if [[ -n "${mount_data}" ]]; then rm -rf "${mount_data}" || true; fi
   if [[ -n "${user_data}" ]]; then rm -rf "${user_data}" || true; fi
   if [[ -n "${stage}" ]]; then rm -rf "${stage}" || true; fi
   if [[ -n "${staged_dmg}" ]]; then rm -f "${staged_dmg}" || true; fi
@@ -49,6 +51,8 @@ mkdir -p dist/installers build
 stage="$(mktemp -d "$PWD/build/vim2-dmg.XXXXXX")"
 ditto "$app" "$stage/VIM2.app"
 ln -s /Applications "$stage/Applications"
+"$PYTHON" packaging/stage_dmg_notes.py "$stage"
+[[ -s "$stage/安装说明.txt" ]]
 dmg="$PWD/dist/installers/VIM2-0.1.0-macos-arm64.dmg"
 # hdiutil appends .dmg unless the destination already uses that suffix.
 staged_dmg="$PWD/dist/installers/VIM2-0.1.0-macos-arm64.partial.dmg"
@@ -59,7 +63,12 @@ mount_dir="$(mktemp -d "${TMPDIR:-/tmp}/vim2-mount.XXXXXX")"
 hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$staged_dmg"
 [[ -x "$mount_dir/VIM2.app/Contents/MacOS/VIM2" ]]
 [[ "$(readlink "$mount_dir/Applications")" == '/Applications' ]]
+[[ -s "$mount_dir/安装说明.txt" ]]
+cmp -s "$PWD/packaging/安装说明.txt" "$mount_dir/安装说明.txt"
 "$PYTHON" tools/verify-installer-layout.py "$mount_dir/VIM2.app"
+mount_data="$(mktemp -d "${TMPDIR:-/tmp}/vim2-mount-check.XXXXXX")"
+QT_QPA_PLATFORM=offscreen "$mount_dir/VIM2.app/Contents/MacOS/VIM2" --check --skip-runtime-check --data-root "$mount_data"
+QT_QPA_PLATFORM=offscreen "$mount_dir/VIM2.app/Contents/MacOS/VIM2" --import-smoke --data-root "$mount_data"
 hdiutil detach "$mount_dir"
 rmdir "$mount_dir"
 mount_dir=""

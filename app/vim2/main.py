@@ -89,6 +89,75 @@ def _report_startup_error(message: str, *, windowed: bool) -> None:
     print(message, file=sys.stderr)
 
 
+DISK_IMAGE_LAUNCH_MESSAGE = """请先把 VIM2.app 拖到“应用程序”（Applications），不要从磁盘镜像直接启动。
+Drag VIM2.app into Applications. Do not launch it from the disk image.
+
+1. 将 VIM2.app 拖到 Applications，并等待约 1.1GB 复制完成。
+2. 弹出此磁盘镜像。
+3. 从“应用程序”中的 VIM2 启动。未签名内测版请右键选择“打开”。
+
+在镜像里启动会直接退出，并且不会在这个位置请求辅助功能或输入监控权限。
+Launching from the image quits without requesting Accessibility or Input Monitoring for this copy.
+"""
+
+
+def launched_from_disk_image(executable: str | Path | None = None) -> bool:
+    """Match mounted-image apps and the standard Gatekeeper translocation layout.
+
+    Do not resolve symlinks: the launch path, not the original file behind a
+    translocated copy, determines which app identity would request permissions.
+    """
+    raw = sys.executable if executable is None else executable
+    parts = tuple(part.casefold() for part in Path(raw).parts)
+    if not parts or parts[0] != "/":
+        return False
+    # Only a real bundle executable has the exact trailing bundle structure.
+    if len(parts) < 7 or parts[-3:-1] != ("contents", "macos"):
+        return False
+    app = parts[-4]
+    if len(app) <= 4 or not app.endswith(".app") or not parts[-1]:
+        return False
+    if parts[1] == "volumes":
+        # The volume name must not masquerade as the .app bundle.
+        return len(parts) == 7 and not parts[2].endswith(".app")
+    # macOS uses /private/var/folders/<bucket>/<user>[/T]/AppTranslocation/
+    # <token>/d/[nested dirs/]<app>.app/Contents/MacOS/<executable>.
+    if parts[1:4] != ("private", "var", "folders"):
+        return False
+    for prefix in (("apptranslocation",), ("t", "apptranslocation")):
+        start = 6
+        if parts[start : start + len(prefix)] != prefix:
+            continue
+        tail = parts[start + len(prefix) :]
+        if len(tail) >= 6 and tail[0] and tail[1] == "d":
+            return True
+    return False
+
+
+def _blocked_disk_image_launch(args: argparse.Namespace) -> bool:
+    if args.check or args.import_smoke or sys.platform != "darwin" or not getattr(sys, "frozen", False):
+        return False
+    return launched_from_disk_image(sys.executable)
+
+
+def _should_request_gui_permissions(args: argparse.Namespace, profile: object) -> bool:
+    """Frozen installed GUI launches may prompt; checks and source launches must not."""
+    return (
+        bool(getattr(sys, "frozen", False))
+        and getattr(profile, "name", "") == "macos"
+        and not args.check
+        and not args.import_smoke
+    )
+
+
+def _macos_gui_permission_guidance(platform_services: object) -> str | None:
+    from vim2.platform_macos import MacOSPlatformServices
+
+    if not isinstance(platform_services, MacOSPlatformServices):
+        return None
+    return platform_services.prepare_gui_permissions()
+
+
 def run(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if getattr(sys, "frozen", False) and args.root is not None:
@@ -96,6 +165,9 @@ def run(argv: Sequence[str] | None = None) -> int:
         return 1
     if not getattr(sys, "frozen", False) and args.data_root is not None:
         _report_startup_error("--data-root is for frozen builds only", windowed=args.windowed)
+        return 1
+    if _blocked_disk_image_launch(args):
+        _report_startup_error(DISK_IMAGE_LAUNCH_MESSAGE, windowed=True)
         return 1
     try:
         paths = (
@@ -138,6 +210,12 @@ def run(argv: Sequence[str] | None = None) -> int:
 
     try:
         platform_services = create_platform_services(paths, profile=profile)
+        if _should_request_gui_permissions(args, profile):
+            guidance = _macos_gui_permission_guidance(platform_services)
+            if guidance:
+                logger.error("macOS GUI permissions are missing")
+                _report_startup_error(guidance, windowed=True)
+                return 1
         platform_errors = (
             platform_services.preflight_errors()
             if not args.skip_runtime_check

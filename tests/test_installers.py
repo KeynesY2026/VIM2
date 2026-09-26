@@ -143,6 +143,8 @@ def test_installer_inputs_are_explicit_and_cpu_only():
     assert "squad" not in spec.lower() and "runtime/" not in spec
     workflow = (ROOT / ".github/workflows/build-installers.yml").read_text()
     assert "windows-2022" in workflow and "workflow_dispatch:" in workflow
+    # A macOS branch push must not schedule the suspended Windows job.
+    assert not any(line.strip().startswith("push:") for line in workflow.splitlines())
     assert "68818b2313fe77bd06f6a7c5068ff3ef59d02b8a" in workflow
     assert "secrets." not in workflow
     iss = (ROOT / "packaging" / "vim2.iss").read_text()

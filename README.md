@@ -8,8 +8,8 @@ VIM2 是以 Windows 10/11 x64 为主、并逐步支持 macOS Apple Silicon 的�
 和文字不上传，也没有云服务费用。
 
 > 0.1.0 已生成 macOS Apple Silicon 自包含 `.app` + `.dmg` 内测产物；Windows
-> 自包含 CPU `Setup.exe` 由 GitHub Actions 构建（待真实 Windows 构建/验收）。
-> 均未获得 Developer ID/发行代码签名，**仅供内部测试，不应对外分发**。
+> Windows Actions / Setup.exe 构建已按用户要求暂停并放弃本轮打包；本轮**没有 Windows 安装产物**。
+> macOS 产物未获得 Developer ID 签名或公证，**仅供内部测试，不应对外分发**。
 > 旧的 CUDA/多模型内容如下为源码 Portable 路径，不代表安装版能力。
 
 [第一次使用：查看完整安装手册](INSTALLATION.md)
@@ -24,14 +24,13 @@ VIM2 是以 Windows 10/11 x64 为主、并逐步支持 macOS Apple Silicon 的�
   得到 `dist/installers/VIM2-0.1.0-macos-arm64.dmg` 及 `.sha256`。
   ad-hoc 签名不等于 Developer ID 或公证；先核验 hash，内测时手动处理
   Gatekeeper 与权限要求，参见 [安装说明](INSTALLATION.md)。
-- Windows 在 `feature/macos-apple-silicon-mvp` push（修改 workflow paths）
-  或 `workflow_dispatch` 时由 `windows-2022` / Python 3.11 x64 的
-  `.github/workflows/build-installers.yml` 构建 Inno Setup 当前用户安装器。
-  可用 `gh workflow run build-installers.yml --ref feature/macos-apple-silicon-mvp`
-  手动触发；运行结束后 `gh run list --workflow build-installers.yml`，
-  选取 run ID 后执行 `gh run download $RUN_ID -n VIM2-0.1.0-windows-x64-unsigned -D ./installer-download`，
-  在下载目录用 `Get-FileHash .\\VIM2-0.1.0-windows-x64-Setup.exe -Algorithm SHA256`
-  比对 `.sha256`。**本机 macOS 不能验证 Windows 二进制。**
+  DMG 根目录的 `安装说明.txt` 要求先拖入 Applications 并弹出镜像，不要在镜像内双击；
+  Gatekeeper App Translocation 的临时镜像 app 路径同样显示提示并退出，不请求该身份的 TCC。
+- Windows Actions / Setup.exe 构建已按用户要求暂停；本轮不触发、不重跑、不修复
+  Windows workflow，也不声称存在 Windows 安装产物。`.github/workflows/build-installers.yml`
+  已移除自动 `push` 触发，仅保留 `workflow_dispatch` 作为未来显式人工恢复入口；
+  向 macOS 分支 push **不会自动运行 Windows job**。是否恢复打包需要另行决定；
+  macOS 不能代替 Windows 真机验收。
 - 安装版 CPU 模型只使用 Hugging Face 镜像
   `csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25`，固定 revision
   `68818b2313fe77bd06f6a7c5068ff3ef59d02b8a`，并按 `release-files.sha256.json`

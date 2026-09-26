@@ -10,12 +10,21 @@ Gatekeeper 可能阻止首次启动，内测人员应核对来源和 SHA-256 后
 “隐私与安全性 → 仍要打开”有意识地授权，不能以此替代正式签名与公证。
 辅助功能、输入监控、麦克风权限须为实际安装位置的 app 单独授予。
 
-Windows 10/11 x64：`VIM2-0.1.0-windows-x64-Setup.exe`，为未签名、
-最低权限的当前用户安装器，安装到 `%LOCALAPPDATA%\\Programs\\VIM2`，
-建立开始菜单快捷方式；无须单独安装 Python/CUDA/PyTorch/模型。SmartScreen
-可能警告未签名程序，内测人员先核验 SHA-256 与来源，再决定是否运行。
-这些产物目前**仅供内部测试**，Windows Setup.exe 须待 Windows Actions
-实际构建及真机验证，不能把 macOS 构建视作 Windows 已验证。
+打开 DMG 后先阅读镜像根目录的 `安装说明.txt`。必须把 `VIM2.app`
+拖到 Applications 并等待约 1.1GB 复制完成，弹出镜像，再从应用程序里右键打开。
+不要在磁盘镜像内双击；包括 Gatekeeper 将镜像内 app 暂时转移到
+`/private/var/folders/.../AppTranslocation/<token>/d/...` 的情形，都会显示安装提示
+并退出，不会在镜像或临时身份上请求权限。
+安装后的首次普通启动会通过系统 API 请求辅助功能和输入监控，并显示说明；
+麦克风仍由系统在录音时请求。`--check` / `--import-smoke` 不弹权限请求。
+Gatekeeper“仍要打开”和 `xattr` 只是受控内测的最后手段，安装包不会自动执行。
+
+Windows 10/11 x64 的 GitHub Actions / Setup.exe 构建已按用户要求暂停、放弃本轮
+打包和重跑；**本轮没有 Windows 安装产物**，不能从 macOS 构建推断 Windows
+已完成或已验证。Windows workflow 已移除自动 `push` 触发：向 macOS 分支 push
+不会自动运行 Windows job；仅保留 `workflow_dispatch` 作为未来显式人工恢复入口，
+本轮不触发。此前设计中的未签名当前用户安装器和 SmartScreen 提示仅是
+未来恢复构建时的规划，不是本轮可安装文件。
 
 两端模型只读，用户配置/热词/日志/锁/临时音频均与安装目录分离：
 macOS `~/Library/Application Support/VIM2/{config,runtime,temp}`；Windows
