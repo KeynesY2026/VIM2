@@ -7,6 +7,13 @@ import vim2.application as application_module
 import vim2.main as main_module
 from vim2.main import run
 from vim2.models import MODEL_SPECS, ModelId
+from vim2.platform_services import select_platform_profile
+
+
+@pytest.fixture(autouse=True)
+def _use_windows_policy(monkeypatch) -> None:
+    profile = select_platform_profile("win32", "AMD64")
+    monkeypatch.setattr(main_module, "select_platform_profile", lambda: profile)
 
 
 @pytest.fixture(autouse=True)
@@ -93,8 +100,9 @@ def test_desktop_startup_defers_cuda_probe_until_after_tray_creation(
     checks: list[tuple[ModelId, bool, bool]] = []
 
     class RecordingChecker:
-        def __init__(self, paths) -> None:
+        def __init__(self, paths, *, platform_profile) -> None:
             del paths
+            assert platform_profile.name == "windows"
 
         def check(
             self,
@@ -110,7 +118,7 @@ def test_desktop_startup_defers_cuda_probe_until_after_tray_creation(
     monkeypatch.setattr(
         application_module,
         "run_desktop_application",
-        lambda paths, settings: 0,
+        lambda paths, settings, **kwargs: 0,
     )
 
     assert run(["--root", str(tmp_path), "--skip-runtime-check"]) == 0

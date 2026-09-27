@@ -1,4 +1,5 @@
 {
+  "macos_paste_shortcut": "command-v",
   "max_recording_seconds": 300,
   "normalize_numbers": true,
   "preview_interval_ms": 1000,

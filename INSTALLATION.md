@@ -1,8 +1,55 @@
-# VIM2 Windows 安装手册
+# VIM2 0.1.0 安装版内测 / 源码 Portable 手册
 
-本手册面向第一次安装 Python 程序的用户，请按顺序操作。
+## 完全自包含安装版（未签名内测）
 
-> 当前版本支持 Windows 10/11 x64。macOS 支持正在路上。
+macOS Apple Silicon 原生 arm64：`VIM2-0.1.0-macos-arm64.dmg`，打开后将
+`VIM2.app` 拖到 Applications 链接；内含原生 Python、PySide6、sherpa-onnx、
+依赖和**仅** `qwen3-asr-0.6b-int8-cpu` 模型。不必安装 Python 或下载模型。
+该 app 为 PyInstaller ad-hoc 签名，**没有 Developer ID 签名、没有公证**；
+Gatekeeper 可能阻止首次启动，内测人员应核对来源和 SHA-256 后通过系统设置
+“隐私与安全性 → 仍要打开”有意识地授权，不能以此替代正式签名与公证。
+辅助功能、输入监控、麦克风权限须为实际安装位置的 app 单独授予。
+
+打开 DMG 后先阅读镜像根目录的 `安装说明.txt`。必须把 `VIM2.app`
+拖到 Applications 并等待约 1.1GB 复制完成，弹出镜像，再从应用程序里右键打开。
+不要在磁盘镜像内双击；包括 Gatekeeper 将镜像内 app 暂时转移到
+`/private/var/folders/.../AppTranslocation/<token>/d/...` 的情形，都会显示安装提示
+并退出，不会在镜像或临时身份上请求权限。
+安装后的首次普通启动会通过系统 API 请求辅助功能和输入监控，并显示说明；
+麦克风仍由系统在录音时请求。`--check` / `--import-smoke` 不弹权限请求。
+Gatekeeper“仍要打开”和 `xattr` 只是受控内测的最后手段，安装包不会自动执行。
+
+Windows 10/11 x64 的 GitHub Actions / Setup.exe 构建已按用户要求暂停、放弃本轮
+打包和重跑；**本轮没有 Windows 安装产物**，不能从 macOS 构建推断 Windows
+已完成或已验证。Windows workflow 已移除自动 `push` 触发：向 macOS 分支 push
+不会自动运行 Windows job；仅保留 `workflow_dispatch` 作为未来显式人工恢复入口，
+本轮不触发。此前设计中的未签名当前用户安装器和 SmartScreen 提示仅是
+未来恢复构建时的规划，不是本轮可安装文件。
+
+两端模型只读，用户配置/热词/日志/锁/临时音频均与安装目录分离：
+macOS `~/Library/Application Support/VIM2/{config,runtime,temp}`；Windows
+`%LOCALAPPDATA%\\VIM2\\{config,runtime,temp}`。首次启动仅补齐缺失的
+`settings.json`、`hotkey.conf`、`hotwords.txt`，不覆盖已有数据；安装包仅含通用
+`hotwords.template.txt`，绝不打包源码目录内被忽略的个人热词文件；卸载程序
+不自动删除用户目录。诊断检查可用 `--check --skip-runtime-check --data-root
+<临时空目录>` 隔离用户数据，**不启动 GUI 或注入按键**，不等同真机验收。
+源码与 `--root` Portable 仍采用旧的仓库根目录布局；下文只适用于源码模式，
+不适用于安装版。
+
+**对外分发阻断条件：** CPU 模型系第三方转换版本，当前 Hugging Face model
+card 缺失 license metadata，必须独立核实来源、上游及转换权利和许可证；
+还需完成 macOS 真机 TCC/粘贴及 Windows 原生/远程桌面验收、发行签名/公证评估。
+安装版构建只接受固定镜像
+`csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25` revision
+`68818b2313fe77bd06f6a7c5068ff3ef59d02b8a` 的六个文件，并按
+`release-files.sha256.json` 校验。下文源码 Portable 的 ModelScope 页面
+`https://modelscope.cn/models/zengshuishui/Qwen3-ASR-onnx` 只是人工下载入口，
+不作为安装版输入；两处都是第三方转换，许可尚未在 HF card 中标明。
+首次写入用户文件时先写临时文件并 fsync，再原子替换；失败不保留半截文件，可重试。
+
+## 以下为源码 Portable 安装说明（不是安装版依赖）
+
+本手册下文面向第一次安装 Python 源码的用户，请按顺序操作。
 
 ## 1. 选择模型
 
@@ -96,7 +143,12 @@ New-Item -ItemType Directory -Force .\.models | Out-Null
 
 ### A. 默认 0.6B INT8 CPU 模型
 
-这是第三方转换的 ONNX INT8 模型，并非 Qwen 官方预量化 checkpoint。来源：[zengshuishui/Qwen3-ASR-onnx](https://modelscope.cn/models/zengshuishui/Qwen3-ASR-onnx/files)。
+这是第三方转换的 ONNX INT8 模型，并非 Qwen 官方预量化 checkpoint。源码
+Portable 可从 ModelScope 人工下载：[zengshuishui/Qwen3-ASR-onnx](https://modelscope.cn/models/zengshuishui/Qwen3-ASR-onnx/files)。
+安装版不从该页面下载，只使用固定 revision
+`68818b2313fe77bd06f6a7c5068ff3ef59d02b8a` 的 Hugging Face 镜像
+`csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25`，并核对
+`release-files.sha256.json`。两处文件均须独立核实来源与许可证。
 
 1. 创建模型目录：
 

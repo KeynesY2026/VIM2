@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -8,6 +9,7 @@ from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication
 
 import vim2.qt_runtime as qt_runtime
+from vim2.config import MacPasteShortcut, MacPasteShortcutSelection
 from vim2.models import ModelId
 from vim2.qt_runtime import HotwordEditorProcess, QtTaskRunner
 
@@ -73,6 +75,61 @@ def test_qt_task_runner_surfaces_unexpected_worker_exception() -> None:
     assert results == []
     assert len(errors) == 1
     assert isinstance(errors[0], KeyError)
+
+
+def test_macos_runtime_restores_a_typed_shared_shortcut_selection() -> None:
+    services = SimpleNamespace(profile=SimpleNamespace(name="macos"))
+
+    selection = qt_runtime._create_macos_paste_shortcut_selection(
+        services,
+        MacPasteShortcut.CONTROL_V,
+    )
+
+    assert isinstance(selection, MacPasteShortcutSelection)
+    assert selection.shortcut is MacPasteShortcut.CONTROL_V
+
+
+def test_windows_runtime_does_not_create_a_macos_shortcut_selection() -> None:
+    services = SimpleNamespace(profile=SimpleNamespace(name="windows"))
+
+    selection = qt_runtime._create_macos_paste_shortcut_selection(
+        services,
+        MacPasteShortcut.COMMAND_V,
+    )
+
+    assert selection is None
+
+
+def test_editor_process_is_only_created_for_windows(tmp_path: Path) -> None:
+    windows = SimpleNamespace(profile=SimpleNamespace(name="windows"))
+    macos = SimpleNamespace(profile=SimpleNamespace(name="macos"))
+    path = tmp_path / "config" / "hotwords.txt"
+
+    assert isinstance(
+        qt_runtime._create_hotword_editor(windows, path), HotwordEditorProcess
+    )
+    assert qt_runtime._create_hotword_editor(macos, path) is None
+
+
+def test_macos_hotword_file_uses_native_file_association(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "配置 空格" / "hotwords.txt"
+    opened = []
+
+    def open_url(url) -> bool:
+        opened.append(url)
+        return True
+
+    monkeypatch.setattr(qt_runtime.QDesktopServices, "openUrl", open_url)
+
+    assert qt_runtime._open_hotwords_file(path)
+    assert path.read_text(encoding="utf-8") == (
+        "# One hotword or phrase per line. Lines beginning with # are ignored.\n"
+    )
+    assert len(opened) == 1
+    assert opened[0].isLocalFile()
+    assert Path(opened[0].toLocalFile()) == path
 
 
 def test_model_runtime_initializes_on_ui_thread_after_tray_is_visible() -> None:

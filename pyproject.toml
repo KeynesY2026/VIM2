@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vim2"
 version = "0.1.0"
-description = "Portable offline Qwen3-ASR voice input for Windows"
+description = "Offline Qwen3-ASR voice input for Windows and macOS CPU Phase 1"
 requires-python = ">=3.10,<3.14"
 
 [tool.pytest.ini_options]

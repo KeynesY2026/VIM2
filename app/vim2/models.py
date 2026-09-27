@@ -34,8 +34,10 @@ MODEL_SPECS = {
         model_id=ModelId.CPU,
         display_name="Qwen3-ASR 0.6B INT8 (CPU)",
         directory_name="sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
-        upstream_id="zengshuishui/Qwen3-ASR-onnx",
-        revision="2026-03-25",
+        upstream_id=(
+            "csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
+        ),
+        revision="68818b2313fe77bd06f6a7c5068ff3ef59d02b8a",
         torch_dtype="",
         load_in_8bit=False,
         backend=ModelBackend.SHERPA_ONNX_CPU,

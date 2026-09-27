@@ -1,0 +1,19 @@
+# Phase-1 macOS Apple Silicon CPU runtime (Python 3.11 only).
+# This is separate from the Windows/CUDA requirements.lock so Windows installs
+# and the existing CUDA pins remain unchanged.
+cffi==2.1.1
+numpy==2.2.6
+pycparser==3.0
+pyobjc-core==11.1
+pyobjc-framework-ApplicationServices==11.1
+pyobjc-framework-AVFoundation==11.1
+pyobjc-framework-Cocoa==11.1
+pyobjc-framework-Quartz==11.1
+PySide6==6.10.0
+PySide6_Addons==6.10.0
+PySide6_Essentials==6.10.0
+sherpa-onnx==1.13.8
+sherpa-onnx-core==1.13.8
+shiboken6==6.10.0
+sounddevice==0.5.3
+soundfile==0.14.0
