@@ -50,7 +50,12 @@ def configure_runtime_logging(
 
     if _fault_stream is not None:
         _fault_stream.close()
-    _fault_stream = log_path.open("a", encoding="utf-8", buffering=1)
+    # Crash dumps go to their own file so that no handle is left open on
+    # vim2.log. RotatingFileHandler renames vim2.log while rotating, and on
+    # Windows that rename fails if anything else still has the file open.
+    _fault_stream = (paths.runtime_dir / "vim2-fault.log").open(
+        "a", encoding="utf-8", buffering=1
+    )
     fault_handler.enable(file=_fault_stream, all_threads=True)
 
     def log_unhandled_exception(exc_type, exc_value, traceback) -> None:

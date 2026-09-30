@@ -388,6 +388,53 @@ def test_error_overlay_stays_for_ten_seconds_then_fades() -> None:
     assert view.overlay.x() == -9999
 
 
+def _record_tray_messages(view: DesktopView) -> list[str]:
+    messages: list[str] = []
+    view.tray.showMessage = (
+        lambda title, message, icon, timeout: messages.append(message)
+    )
+    return messages
+
+
+def test_repeated_identical_error_shows_a_single_notification() -> None:
+    _app()
+    view = DesktopView()
+    messages = _record_tray_messages(view)
+
+    view.show_error("Microphone unavailable")
+    view.show_error("Microphone unavailable")
+    view.show_error("Microphone unavailable")
+
+    assert messages == ["Microphone unavailable"]
+
+
+def test_different_messages_are_never_suppressed() -> None:
+    _app()
+    view = DesktopView()
+    messages = _record_tray_messages(view)
+
+    view.show_error("Microphone unavailable")
+    view.show_warning("Live preview failed")
+
+    assert messages == ["Microphone unavailable", "Live preview failed"]
+
+
+def test_identical_error_notifies_again_once_the_balloon_expired(
+    monkeypatch,
+) -> None:
+    _app()
+    view = DesktopView()
+    messages = _record_tray_messages(view)
+    clock = iter([100.0, 104.0, 108.0])
+    monkeypatch.setattr(ui_module.time, "monotonic", lambda: next(clock))
+
+    view.show_error("Microphone unavailable")
+    view.show_error("Microphone unavailable")
+    view.show_error("Microphone unavailable")
+
+    assert messages == ["Microphone unavailable", "Microphone unavailable"]
+
+
 def test_ready_state_parks_loading_overlay_off_screen() -> None:
     _app()
     view = DesktopView()

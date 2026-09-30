@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -59,22 +62,62 @@ class AudioRecorder:
             self._sounddevice, "PortAudioError", RuntimeError
         )
         try:
-            stream = self._sounddevice.InputStream(
-                device=None,
-                samplerate=self._sample_rate,
-                channels=1,
-                dtype="float32",
-                blocksize=0,
-                latency="high",
-                callback=self._on_audio,
+            stream = self._open_default_input()
+        except (OSError, RuntimeError, portaudio_error) as initial_error:
+            # A microphone plugged in after VIM2 started stays invisible to
+            # PortAudio, so re-enumerate devices once and retry before
+            # giving up.
+            logger.info(
+                "Could not open the default microphone, reloading devices: %s",
+                initial_error,
             )
-            stream.start()
-        except (OSError, RuntimeError, portaudio_error) as exc:
-            self._accepting_audio = False
-            raise RuntimeError(
-                f"Cannot open the current Windows default microphone: {exc}"
-            ) from exc
+            try:
+                self._reload_devices()
+                stream = self._open_default_input()
+            except (OSError, RuntimeError, portaudio_error) as exc:
+                self._accepting_audio = False
+                logger.exception(
+                    "Cannot open the current Windows default microphone: %s",
+                    exc,
+                )
+                raise RuntimeError(
+                    f"Cannot open the current Windows default microphone: {exc}"
+                ) from exc
         self._stream = stream
+
+    def _open_default_input(self):
+        """Open and start a stream on the current default input device."""
+        stream = self._sounddevice.InputStream(
+            device=None,
+            samplerate=self._sample_rate,
+            channels=1,
+            dtype="float32",
+            blocksize=0,
+            latency="high",
+            callback=self._on_audio,
+        )
+        try:
+            stream.start()
+        except Exception:
+            stream.close()
+            raise
+        return stream
+
+    def _reload_devices(self) -> None:
+        """Re-enumerate devices so the current default input device is used.
+
+        PortAudio resolves its device list and default input device only
+        when it is initialized, so a microphone plugged in after VIM2
+        started stays invisible until it is initialized again. Must only
+        run while no stream is open, because terminating PortAudio closes
+        every open stream.
+        """
+        terminate = getattr(self._sounddevice, "_terminate", None)
+        initialize = getattr(self._sounddevice, "_initialize", None)
+        if terminate is None or initialize is None:
+            return
+        terminate()
+        initialize()
 
     def _on_audio(
         self,

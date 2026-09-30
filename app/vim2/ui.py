@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import math
+import time
 from dataclasses import dataclass
 
 from PySide6.QtCore import (
@@ -380,9 +381,15 @@ def wintypes_rect() -> _Rect:
 
 
 class DesktopView:
+    # Windows shows each tray balloon for a limited time; re-issuing the same
+    # message while one is still showing only fills the notification queue.
+    # Suppress a message that is already showing so the tray stays calm.
+    _TRAY_MESSAGE_SUPPRESS_SECONDS = 6.0
+
     def __init__(self) -> None:
         self.overlay = VoiceOverlay()
         self.tray = QSystemTrayIcon()
+        self._last_tray_message: tuple[str, float] | None = None
         self.menu = QMenu()
         self.status_action = QAction("VIM2：启动中")
         self.status_action.setEnabled(False)
@@ -518,9 +525,25 @@ class DesktopView:
         self._latest_preview = text
         self.overlay.set_recording(preview=text)
 
+    def _show_tray_message(
+        self,
+        message: str,
+        icon: QSystemTrayIcon.MessageIcon,
+        timeout_ms: int,
+    ) -> None:
+        now = time.monotonic()
+        if self._last_tray_message is not None:
+            previous, shown_at = self._last_tray_message
+            if (
+                message == previous
+                and now - shown_at < self._TRAY_MESSAGE_SUPPRESS_SECONDS
+            ):
+                return
+        self._last_tray_message = (message, now)
+        self.tray.showMessage("VIM2", message, icon, timeout_ms)
+
     def show_error(self, message: str) -> None:
-        self.tray.showMessage(
-            "VIM2",
+        self._show_tray_message(
             message,
             QSystemTrayIcon.MessageIcon.Critical,
             7000,
@@ -530,16 +553,14 @@ class DesktopView:
         self._error_hide_timer.start()
 
     def show_warning(self, message: str) -> None:
-        self.tray.showMessage(
-            "VIM2",
+        self._show_tray_message(
             message,
             QSystemTrayIcon.MessageIcon.Warning,
             5000,
         )
 
     def show_info(self, message: str) -> None:
-        self.tray.showMessage(
-            "VIM2",
+        self._show_tray_message(
             message,
             QSystemTrayIcon.MessageIcon.Information,
             5000,

@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -12,9 +13,12 @@ class FakeInputStream:
         self.started = False
         self.stopped = False
         self.closed = False
+        self.start_error: Exception | None = None
         self.stop_error: Exception | None = None
 
     def start(self) -> None:
+        if self.start_error is not None:
+            raise self.start_error
         self.started = True
 
     def stop(self) -> None:
@@ -35,6 +39,42 @@ class FakeSoundDevice:
         return self.stream
 
 
+class ReloadableSoundDevice(FakeSoundDevice):
+    def __init__(
+        self,
+        *,
+        fail_opens: int = 0,
+        fail_starts: int = 0,
+        fail_initialize: Exception | None = None,
+    ) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+        self.fail_opens = fail_opens
+        self.fail_starts = fail_starts
+        self.fail_initialize = fail_initialize
+        self.streams: list[FakeInputStream] = []
+
+    def _terminate(self) -> None:
+        self.calls.append("terminate")
+
+    def _initialize(self) -> None:
+        self.calls.append("initialize")
+        if self.fail_initialize is not None:
+            raise self.fail_initialize
+
+    def InputStream(self, **kwargs) -> FakeInputStream:
+        self.calls.append("InputStream")
+        if self.fail_opens > 0:
+            self.fail_opens -= 1
+            raise RuntimeError("Error opening InputStream")
+        stream = super().InputStream(**kwargs)
+        if self.fail_starts > 0:
+            self.fail_starts -= 1
+            stream.start_error = RuntimeError("Error starting InputStream")
+        self.streams.append(stream)
+        return stream
+
+
 def test_each_recording_uses_current_default_input_device(tmp_path: Path) -> None:
     backend = FakeSoundDevice()
     recorder = AudioRecorder(sounddevice=backend)
@@ -46,6 +86,102 @@ def test_each_recording_uses_current_default_input_device(tmp_path: Path) -> Non
     assert backend.stream.kwargs["samplerate"] == 16_000
     assert backend.stream.kwargs["channels"] == 1
     assert backend.stream.kwargs["latency"] == "high"
+
+
+def test_start_opens_stream_without_reloading_devices() -> None:
+    backend = ReloadableSoundDevice()
+    recorder = AudioRecorder(sounddevice=backend)
+
+    recorder.start()
+
+    assert backend.calls == ["InputStream"]
+    recorder.cancel()
+
+
+def test_start_reloads_devices_and_retries_when_open_fails() -> None:
+    backend = ReloadableSoundDevice(fail_opens=1)
+    recorder = AudioRecorder(sounddevice=backend)
+
+    recorder.start()
+
+    assert backend.calls == [
+        "InputStream",
+        "terminate",
+        "initialize",
+        "InputStream",
+    ]
+    assert backend.stream is not None
+    assert backend.stream.started is True
+    recorder.cancel()
+
+
+def test_start_reports_error_when_retry_also_fails() -> None:
+    backend = ReloadableSoundDevice(fail_opens=2)
+    recorder = AudioRecorder(sounddevice=backend)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Cannot open the current Windows default microphone",
+    ):
+        recorder.start()
+
+    assert backend.calls == [
+        "InputStream",
+        "terminate",
+        "initialize",
+        "InputStream",
+    ]
+
+
+def test_start_reports_device_reload_failure_as_microphone_error() -> None:
+    backend = ReloadableSoundDevice(
+        fail_opens=1, fail_initialize=RuntimeError("portaudio down")
+    )
+    recorder = AudioRecorder(sounddevice=backend)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Cannot open the current Windows default microphone",
+    ):
+        recorder.start()
+
+
+def test_start_closes_stream_that_fails_to_start() -> None:
+    backend = ReloadableSoundDevice(fail_starts=1)
+    recorder = AudioRecorder(sounddevice=backend)
+
+    recorder.start()
+
+    assert backend.streams[0].closed is True
+    assert backend.stream is backend.streams[1]
+    recorder.cancel()
+
+
+def test_start_logs_portaudio_error_that_triggered_the_retry(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(logging.getLogger("vim2"), "propagate", True)
+    backend = ReloadableSoundDevice(fail_opens=1)
+    recorder = AudioRecorder(sounddevice=backend)
+
+    with caplog.at_level(logging.INFO):
+        recorder.start()
+
+    assert "Error opening InputStream" in caplog.text
+    recorder.cancel()
+
+
+def test_start_logs_portaudio_error_when_retry_also_fails(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(logging.getLogger("vim2"), "propagate", True)
+    backend = ReloadableSoundDevice(fail_opens=2)
+    recorder = AudioRecorder(sounddevice=backend)
+
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError):
+        recorder.start()
+
+    assert "Error opening InputStream" in caplog.text
 
 
 def test_stop_returns_audio_in_memory_without_creating_wav(
