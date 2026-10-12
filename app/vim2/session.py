@@ -20,6 +20,7 @@ from vim2.transcript import (
 
 MAX_TAIL_RATIO = 0.70
 MAX_PREVIEW_SECONDS = 8
+MAX_DRAFT_PREVIEW_SECONDS = 60
 RECOGNITION_ERRORS = (OSError, RuntimeError, ValueError, MemoryError)
 
 
@@ -44,6 +45,18 @@ class Recorder(Protocol):
 
 
 class Recognizer(Protocol):
+    @property
+    def supports_live_draft(self) -> bool: ...
+
+    def reset_live_draft(self) -> None: ...
+
+    def transcribe_preview(
+        self, artifact: AudioArtifact, model_id: ModelId,
+        *, cancel_event: threading.Event | None = None,
+    ) -> str: ...
+
+    def transcribe_final(self, artifact: AudioArtifact, model_id: ModelId) -> str: ...
+
     def transcribe(
         self,
         artifact: AudioArtifact,
@@ -102,10 +115,19 @@ class VoiceSession:
     def warnings(self) -> tuple[str, ...]:
         return self._warnings
 
+    @property
+    def uses_live_draft(self) -> bool:
+        return getattr(self._recognizer, "supports_live_draft", False)
+
+    def _reset_live_draft(self) -> None:
+        if self.uses_live_draft:
+            self._recognizer.reset_live_draft()
+
     def start(self, *, target_window: int, model_id: ModelId) -> None:
         if self.state is not AppState.READY:
             raise RuntimeError(f"Cannot start recording while {self.state.value}")
         self._recorder.start()
+        self._reset_live_draft()
         self._stable_prefix.reset()
         self._capture_sealed = False
         self._target_window = target_window
@@ -148,6 +170,7 @@ class VoiceSession:
         if self.state is not AppState.RETRY_PENDING:
             raise RuntimeError("There is no failed recognition to retry")
         self._machine.transition_to(AppState.FINALIZING)
+        self._reset_live_draft()
         return self._recognize_pending(allow_tail=False)
 
     def preview(
@@ -158,10 +181,18 @@ class VoiceSession:
         if cancel_event is not None and cancel_event.is_set():
             raise TranscriptionCancelled()
         artifact = self._recorder.snapshot(
-            max_seconds=self._preview_window_seconds
+            max_seconds=(
+                MAX_DRAFT_PREVIEW_SECONDS if self.uses_live_draft
+                else self._preview_window_seconds
+            )
         )
         self._machine.transition_to(AppState.LIVE_TRANSCRIBING)
         try:
+            if self.uses_live_draft:
+                self._log_preview_window(artifact, self._model_id)
+                return self._recognizer.transcribe_preview(
+                    artifact, self._model_id, cancel_event=cancel_event
+                ).strip()
             text, is_complete = self._recognize_preview(
                 artifact, self._model_id, cancel_event=cancel_event
             )
@@ -258,6 +289,8 @@ class VoiceSession:
         *,
         allow_tail: bool,
     ) -> str:
+        if self.uses_live_draft:
+            return self._recognizer.transcribe_final(artifact, model_id).strip()
         checkpoint = self._stable_prefix.checkpoint
         if allow_tail and checkpoint is not None:
             overlap_frames = (
@@ -304,9 +337,11 @@ class VoiceSession:
             self._recorder.discard(artifact)
             self._pending_audio = None
             self._capture_sealed = False
+            self._reset_live_draft()
             self._machine.transition_to(AppState.READY)
 
     def cancel(self) -> None:
+        self._reset_live_draft()
         if self.state is AppState.RECORDING:
             self._recorder.cancel()
             self._capture_sealed = False

@@ -500,6 +500,55 @@ def test_busy_preview_waits_for_next_timer_tick(tmp_path: Path) -> None:
     assert controller.state is AppState.RECORDING
 
 
+def test_stopping_during_draft_preview_preserves_last_successful_draft(tmp_path):
+    _, recognizer, recorder, paster, view, repository = _controller(
+        tmp_path, ["draft", "final"]
+    )
+    recognizer.supports_live_draft = True
+    drafts = []
+    final_drafts = []
+
+    def reset():
+        drafts.clear()
+
+    def preview(artifact, model_id, *, cancel_event=None):
+        text = recognizer.transcribe(artifact, model_id, cancel_event=cancel_event)
+        drafts[:] = [text]
+        return text
+
+    def final(artifact, model_id):
+        final_drafts.append(list(drafts))
+        return recognizer.transcribe(artifact, model_id)
+
+    recognizer.reset_live_draft = reset
+    recognizer.transcribe_preview = preview
+    recognizer.transcribe_final = final
+    runner = DeferredRunner()
+    machine = StateMachine()
+    controller = AppController(
+        machine=machine, settings=Settings(), settings_repository=repository,
+        recognizer=recognizer,
+        session=VoiceSession(machine, recorder, recognizer, paster),
+        view=view, task_runner=runner, foreground_window=lambda: 321,
+    )
+    controller.start()
+    runner.complete_next()
+    controller.toggle_recording()
+    controller.request_preview()
+    runner.complete_next()
+    assert drafts == ["draft"]
+    controller.request_preview()
+    controller.toggle_recording()
+    runner.complete_next()
+    assert drafts == ["draft"]
+    assert recognizer.transcribe_calls == 1
+    runner.complete_next()
+    assert final_drafts == [["draft"]]
+    assert drafts == []
+    assert paster.calls == [("final", 321)]
+    assert controller.state is AppState.READY
+
+
 def test_nonfatal_capture_warning_is_reported_after_result(
     tmp_path: Path,
 ) -> None:

@@ -8,6 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from vim2.audio import AudioArtifact
+from vim2.attention import (
+    AUDIO_SDPA_IMPLEMENTATION,
+    TEXT_SDPA_IMPLEMENTATION,
+    WINDOWED_AUDIO_THRESHOLD_SECONDS,
+    audio_sdpa_attention_forward,
+    text_sdpa_attention_forward,
+)
 from vim2.hotwords import HotwordRepository, HotwordSnapshot
 from vim2.models import MODEL_SPECS, ModelBackend, ModelId, ModelSpec
 from vim2.paths import AppPaths
@@ -52,6 +59,7 @@ class QwenRecognizer:
         model_class: Any | None = None,
         bits_config_class: Any | None = None,
         sherpa_module: Any | None = None,
+        attention_interface: Any | None = None,
     ) -> None:
         enforce_offline_environment()
         self._paths = paths
@@ -59,11 +67,65 @@ class QwenRecognizer:
         self._model_class = model_class
         self._bits_config_class = bits_config_class
         self._sherpa = sherpa_module
+        self._attention_interface = attention_interface
         self._model: Any | None = None
         self._loaded_model: ModelId | None = None
         self._lock = threading.RLock()
         self._hotword_repository = HotwordRepository(paths.hotwords_file)
         self._hotwords = HotwordSnapshot(())
+        self._draft_tokens: tuple[int, ...] = ()
+
+    @property
+    def supports_live_draft(self) -> bool:
+        return self._loaded_model is ModelId.FAST
+
+    def reset_live_draft(self) -> None:
+        with self._lock:
+            self._draft_tokens = ()
+
+    def transcribe_preview(
+        self, audio: AudioArtifact, model_id: ModelId,
+        *, cancel_event: threading.Event | None = None,
+    ) -> str:
+        with self._lock:
+            text, tokens = self._transcribe_draft(
+                audio, model_id, cancel_event=cancel_event
+            )
+            self._draft_tokens = tokens
+            return text
+
+    def transcribe_final(self, audio: AudioArtifact, model_id: ModelId) -> str:
+        with self._lock:
+            text, _ = self._transcribe_draft(audio, model_id)
+            return text
+
+    def _transcribe_draft(
+        self, audio: AudioArtifact, model_id: ModelId,
+        *, cancel_event: threading.Event | None = None,
+    ) -> tuple[str, tuple[int, ...]]:
+        if not self.supports_live_draft or model_id is not self._loaded_model:
+            raise RuntimeError("Live draft decoding is not enabled for this model")
+        from vim2.draft import GpuDraftDecoder
+
+        generation_model = self._model.model
+        original_generate = generation_model.generate
+        decoder = GpuDraftDecoder(
+            generation_model, self._torch, self._draft_tokens,
+            cancel_event=cancel_event, cancellation_error=TranscriptionCancelled,
+        )
+        generation_model.generate = decoder.generate
+        try:
+            # The decoder checks cancellation on each verification batch.
+            text = self.transcribe(audio, model_id)
+            if cancel_event is not None and cancel_event.is_set():
+                raise TranscriptionCancelled()
+            logger.info(
+                "Draft decoding: tokens=%d verified=%d forwards=%d",
+                len(decoder.tokens), decoder.verified_tokens, decoder.forward_calls,
+            )
+            return text, decoder.tokens
+        finally:
+            generation_model.generate = original_generate
 
     @property
     def loaded_model(self) -> ModelId | None:
@@ -129,20 +191,28 @@ class QwenRecognizer:
         self, spec: ModelSpec, hotwords: HotwordSnapshot
     ) -> Any:
         model_path = self._paths.models_dir / spec.directory_name
+        processor_count = os.cpu_count()
+        if processor_count is None:
+            logger.warning("Cannot determine processor count; keeping two CPU inference threads")
+            num_threads = 2
+        else:
+            num_threads = min(4, processor_count)
+        logger.info("CPU inference configuration: threads=%d max_total_len=4096", num_threads)
         return self._sherpa.OfflineRecognizer.from_qwen3_asr(
             conv_frontend=str(model_path / "conv_frontend.onnx"),
             encoder=str(model_path / "encoder.int8.onnx"),
             decoder=str(model_path / "decoder.int8.onnx"),
             tokenizer=str(model_path / "tokenizer"),
-            num_threads=2,
+            num_threads=num_threads,
             provider="cpu",
-            max_total_len=1024,
+            max_total_len=4096,
             max_new_tokens=512,
             hotwords=hotwords.cpu_hotwords,
         )
 
     def reload_hotwords(self) -> HotwordSnapshot:
         with self._lock:
+            self.reset_live_draft()
             hotwords = self._hotword_repository.load()
             if (
                 self._loaded_model is not None
@@ -174,9 +244,23 @@ class QwenRecognizer:
             from transformers import BitsAndBytesConfig
 
             self._bits_config_class = BitsAndBytesConfig
+        if self._attention_interface is None:
+            from transformers import AttentionInterface
+
+            self._attention_interface = AttentionInterface
+        self._attention_interface.register(
+            AUDIO_SDPA_IMPLEMENTATION, audio_sdpa_attention_forward
+        )
+        self._attention_interface.register(
+            TEXT_SDPA_IMPLEMENTATION, text_sdpa_attention_forward
+        )
+        from transformers.masking_utils import AttentionMaskInterface, sdpa_mask
+
+        AttentionMaskInterface.register(TEXT_SDPA_IMPLEMENTATION, sdpa_mask)
 
     def unload(self) -> None:
         with self._lock:
+            self.reset_live_draft()
             if self._model is None:
                 return
             loaded_model = self._loaded_model
@@ -262,9 +346,19 @@ class QwenRecognizer:
             model_audio: tuple[Any, int] | str
             if isinstance(audio, AudioArtifact):
                 model_audio = (audio.samples, audio.sample_rate)
+                duration_seconds = audio.duration_seconds
             else:
+                import soundfile
+
                 model_audio = str(audio)
+                duration_seconds = soundfile.info(audio).duration
             generation_model = getattr(self._model, "model", None)
+            audio_tower = generation_model.thinker.audio_tower
+            audio_config = audio_tower.config
+            original_audio_attention = audio_config._attn_implementation
+            original_convolution_batch = audio_tower.conv_chunksize
+            text_config = generation_model.thinker.model.config
+            original_text_attention = text_config._attn_implementation
             original_generate = None
             if cancel_event is not None and generation_model is not None:
                 original_generate = generation_model.generate
@@ -285,12 +379,25 @@ class QwenRecognizer:
 
                 generation_model.generate = cancellable_generate
             try:
+                if duration_seconds > WINDOWED_AUDIO_THRESHOLD_SECONDS:
+                    audio_config._attn_implementation = AUDIO_SDPA_IMPLEMENTATION
+                    if self.supports_live_draft:
+                        audio_tower.conv_chunksize = min(original_convolution_batch, 16)
+                        text_config._attn_implementation = TEXT_SDPA_IMPLEMENTATION
+                logger.info(
+                    "Audio attention: model=%s duration=%.3fs implementation=%s conv_chunks=%d",
+                    model_id, duration_seconds, audio_config._attn_implementation,
+                    audio_tower.conv_chunksize,
+                )
                 results = self._model.transcribe(
                     audio=model_audio,
                     language=None,
                     context=self._hotwords.gpu_context,
                 )
             finally:
+                audio_config._attn_implementation = original_audio_attention
+                audio_tower.conv_chunksize = original_convolution_batch
+                text_config._attn_implementation = original_text_attention
                 if original_generate is not None:
                     generation_model.generate = original_generate
             if cancel_event is not None and cancel_event.is_set():

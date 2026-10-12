@@ -124,6 +124,66 @@ def _long_artifact(tmp_path) -> AudioArtifact:
     return AudioArtifact(np.zeros(960_000, dtype=np.float32), 16_000)
 
 
+class DraftRecognizer(FakeRecognizer):
+    supports_live_draft = True
+
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.resets = 0
+        self.preview_calls = 0
+        self.final_calls = 0
+
+    def reset_live_draft(self):
+        self.resets += 1
+
+    def transcribe_preview(self, artifact, model_id, *, cancel_event=None):
+        self.preview_calls += 1
+        return self.transcribe(artifact, model_id, cancel_event=cancel_event)
+
+    def transcribe_final(self, artifact, model_id):
+        self.final_calls += 1
+        return self.transcribe(artifact, model_id)
+
+
+def test_draft_session_uses_bounded_context_and_verifies_whole_audio_without_seams(tmp_path):
+    artifact = _long_artifact(tmp_path)
+    recorder = FakeRecorder(artifact)
+    recognizer = DraftRecognizer(["old.", "corrected final."])
+    session = VoiceSession(_ready_machine(), recorder, recognizer, FakePaster())
+    session.start(target_window=42, model_id=ModelId.FAST)
+    assert session.preview() == "old."
+    assert recorder.snapshot_max_seconds == [60]
+    assert session.stop() == "corrected final."
+    assert recorder.slices == []
+    assert recognizer.calls[-1][0] is artifact
+    assert recognizer.preview_calls == recognizer.final_calls == 1
+    assert recognizer.resets == 2
+
+
+def test_draft_retry_clears_old_tokens_but_preserves_failed_recording(tmp_path):
+    artifact = _artifact(tmp_path)
+    recorder = FakeRecorder(artifact)
+    recognizer = DraftRecognizer([RuntimeError("failed"), "retry"])
+    session = VoiceSession(_ready_machine(), recorder, recognizer, FakePaster())
+    session.start(target_window=42, model_id=ModelId.FAST)
+    with pytest.raises(FinalRecognitionError):
+        session.stop()
+    assert recorder.discarded == []
+    assert session.retry() == "retry"
+    assert recognizer.resets == 3
+    assert [call[0] for call in recognizer.calls] == [artifact, artifact]
+
+
+def test_cancelling_draft_recording_clears_session_tokens(tmp_path):
+    recognizer = DraftRecognizer([])
+    session = VoiceSession(
+        _ready_machine(), FakeRecorder(_artifact(tmp_path)), recognizer, FakePaster()
+    )
+    session.start(target_window=42, model_id=ModelId.FAST)
+    session.cancel()
+    assert recognizer.resets == 2
+
+
 def test_final_recognition_uses_complete_recording_then_pastes_and_deletes(
     tmp_path: Path,
 ) -> None:
