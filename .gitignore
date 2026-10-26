@@ -7,3 +7,4 @@ temp/
 *benchmark-smoke*.json
 runtime/
 config/hotwords.txt
+local-test-data/

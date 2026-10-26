@@ -10,9 +10,9 @@ if ($LASTEXITCODE -ne 0) {
     throw "Python 3.10 through 3.13 is required."
 }
 
-& $Python -c "import bitsandbytes, numpy, PySide6, qwen_asr, sherpa_onnx, sounddevice, soundfile, torch, transformers"
+& $Python -c "import bitsandbytes, numpy, PySide6, qwen_asr, sherpa_onnx, sounddevice, soundfile, torch, transformers, webrtcvad"
 if ($LASTEXITCODE -ne 0) {
-    throw "Required global Python packages are missing. See requirements.lock."
+    throw "Required global Python packages are missing. See requirements-gpu-cu128.lock."
 }
 
 function Test-ModelComplete {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from time import monotonic
 from typing import Protocol
 
 from vim2.audio import AudioArtifact
@@ -10,6 +11,7 @@ from vim2.postprocessing import (
     TextPostProcessor,
     TextPostProcessingPipeline,
 )
+from vim2.preview import DraftPreviewPolicy
 from vim2.recognizer import TranscriptionCancelled
 from vim2.state import AppState, StateMachine
 from vim2.transcript import (
@@ -97,6 +99,7 @@ class VoiceSession:
         self._shutting_down = False
         self._stable_prefix = StablePrefixTracker()
         self._capture_sealed = False
+        self._draft_preview_policy: DraftPreviewPolicy | None = None
         self._tail_overlap_seconds = tail_overlap_seconds
         self._preview_window_seconds = (
             MAX_PREVIEW_SECONDS
@@ -126,13 +129,23 @@ class VoiceSession:
     def start(self, *, target_window: int, model_id: ModelId) -> None:
         if self.state is not AppState.READY:
             raise RuntimeError(f"Cannot start recording while {self.state.value}")
+        policy = DraftPreviewPolicy() if self.uses_live_draft else None
         self._recorder.start()
         self._reset_live_draft()
+        self._draft_preview_policy = policy
         self._stable_prefix.reset()
         self._capture_sealed = False
         self._target_window = target_window
         self._model_id = model_id
         self._warnings = ()
+        if policy is not None:
+            logging.getLogger(__name__).info(
+                "GPU preview policy: window=%ds interval=%.1fs min_rest=%.1fs "
+                "busy_budget=%.2f pause=%.1fs audit=%.1fs",
+                MAX_DRAFT_PREVIEW_SECONDS, policy.INTERVAL_SECONDS,
+                policy.MIN_REST_SECONDS, policy.MAX_BUSY_FRACTION,
+                policy.PAUSE_SECONDS, policy.AUDIT_SECONDS,
+            )
         self._machine.transition_to(AppState.RECORDING)
 
     def seal(self) -> None:
@@ -175,7 +188,7 @@ class VoiceSession:
 
     def preview(
         self, *, cancel_event: threading.Event | None = None
-    ) -> str:
+    ) -> str | None:
         if self.state is not AppState.RECORDING or self._model_id is None:
             raise RuntimeError("No recording is in progress")
         if cancel_event is not None and cancel_event.is_set():
@@ -186,13 +199,27 @@ class VoiceSession:
                 else self._preview_window_seconds
             )
         )
-        self._machine.transition_to(AppState.LIVE_TRANSCRIBING)
         try:
+            if (
+                self._draft_preview_policy is not None
+                and not self._draft_preview_policy.should_run(artifact, monotonic())
+            ):
+                return None
+            self._machine.transition_to(AppState.LIVE_TRANSCRIBING)
             if self.uses_live_draft:
                 self._log_preview_window(artifact, self._model_id)
-                return self._recognizer.transcribe_preview(
-                    artifact, self._model_id, cancel_event=cancel_event
-                ).strip()
+                success = False
+                try:
+                    text = self._recognizer.transcribe_preview(
+                        artifact, self._model_id, cancel_event=cancel_event
+                    ).strip()
+                    success = True
+                    return text
+                finally:
+                    if self._draft_preview_policy is not None:
+                        self._draft_preview_policy.completed(
+                            artifact, monotonic(), success=success
+                        )
             text, is_complete = self._recognize_preview(
                 artifact, self._model_id, cancel_event=cancel_event
             )

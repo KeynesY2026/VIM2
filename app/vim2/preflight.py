@@ -76,6 +76,8 @@ class PreflightChecker:
                     "soundfile",
                     "transformers",
                 )
+            if selected_model is ModelId.FAST:
+                modules += ("webrtcvad",)
             for module in modules:
                 if self._dependency_finder(module) is None:
                     errors.append(

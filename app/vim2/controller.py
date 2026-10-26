@@ -163,7 +163,11 @@ class AppController:
         self._view.start_recording_timers(
             self._settings.max_recording_seconds,
             target_window,
-            self._settings.preview_interval_ms,
+            (
+                min(500, self._settings.preview_interval_ms)
+                if self._session.uses_live_draft
+                else self._settings.preview_interval_ms
+            ),
         )
 
     def request_preview(self) -> None:
@@ -188,7 +192,8 @@ class AppController:
     def _on_preview(self, result: object) -> None:
         self._preview_busy = False
         self._preview_cancel_event = None
-        self._view.show_preview(str(result))
+        if result is not None:
+            self._view.show_preview(str(result))
         self._after_preview()
 
     def _on_preview_error(self, error: Exception) -> None:

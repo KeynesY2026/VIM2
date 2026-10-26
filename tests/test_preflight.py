@@ -100,6 +100,7 @@ def test_preflight_reports_missing_portable_dependencies(
         "Python dependency is missing: numpy",
         "Python dependency is missing: soundfile",
         "Python dependency is missing: transformers",
+        "Python dependency is missing: webrtcvad",
     )
 
 
@@ -124,3 +125,19 @@ def test_cpu_preflight_requires_sherpa_but_not_cuda_runtime(
     assert result.errors == (
         "Python dependency is missing: sherpa_onnx",
     )
+
+
+def test_vad_is_required_only_for_gpu_fast_preview(tmp_path: Path) -> None:
+    paths = AppPaths.from_root(tmp_path)
+    for model_id in (ModelId.FAST, ModelId.ACCURATE):
+        _create_minimal_model(
+            paths.models_dir / MODEL_SPECS[model_id].directory_name
+        )
+    checker = PreflightChecker(
+        paths, python_version=(3, 13, 0),
+        dependency_finder=lambda name: None if name == "webrtcvad" else object(),
+    )
+    assert checker.check(ModelId.FAST, check_cuda=False).errors == (
+        "Python dependency is missing: webrtcvad",
+    )
+    assert checker.check(ModelId.ACCURATE, check_cuda=False).ok

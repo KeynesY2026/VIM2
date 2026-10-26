@@ -500,11 +500,18 @@ def test_busy_preview_waits_for_next_timer_tick(tmp_path: Path) -> None:
     assert controller.state is AppState.RECORDING
 
 
-def test_stopping_during_draft_preview_preserves_last_successful_draft(tmp_path):
+def test_stopping_during_draft_preview_preserves_last_successful_draft(tmp_path, monkeypatch):
     _, recognizer, recorder, paster, view, repository = _controller(
         tmp_path, ["draft", "final"]
     )
     recognizer.supports_live_draft = True
+    now = [1.0]
+    monkeypatch.setattr("vim2.session.monotonic", lambda: now[0])
+    monkeypatch.setattr("webrtcvad.Vad.is_speech", lambda self, data, rate: any(data))
+    recorder.snapshot = lambda max_seconds=None: AudioArtifact(
+        np.full(16_000, 0.1, dtype=np.float32), 16_000,
+        start_frame=int(now[0] * 16_000),
+    )
     drafts = []
     final_drafts = []
 
@@ -534,9 +541,11 @@ def test_stopping_during_draft_preview_preserves_last_successful_draft(tmp_path)
     controller.start()
     runner.complete_next()
     controller.toggle_recording()
+    assert view.preview_intervals == [500]
     controller.request_preview()
     runner.complete_next()
     assert drafts == ["draft"]
+    now[0] = 7.0
     controller.request_preview()
     controller.toggle_recording()
     runner.complete_next()
@@ -547,6 +556,19 @@ def test_stopping_during_draft_preview_preserves_last_successful_draft(tmp_path)
     assert drafts == []
     assert paster.calls == [("final", 321)]
     assert controller.state is AppState.READY
+
+
+def test_skipped_preview_does_not_publish_none_or_erase_display(tmp_path):
+    controller, _, _, _, view, _ = _controller(tmp_path, [])
+    controller.start()
+    controller.toggle_recording()
+    controller._session.preview = lambda **kwargs: None
+
+    controller.request_preview()
+
+    assert view.previews == []
+    assert view.warnings == []
+    assert controller.state is AppState.RECORDING
 
 
 def test_nonfatal_capture_warning_is_reported_after_result(

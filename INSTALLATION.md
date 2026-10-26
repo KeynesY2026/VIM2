@@ -58,31 +58,46 @@ nvidia-smi
 1. 获取 VIM2 发布包或项目目录。
 2. 如果是 ZIP，右键选择 **全部解压缩**，不要直接在压缩包中运行。
 3. 将文件夹放在固定位置，例如 `D:\Apps\VIM2`。
-4. 确认根目录有 `Start.cmd`、`start.ps1`、`requirements.lock`、`app` 和 `config`。
+4. 确认根目录有 `Start.cmd`、`start.ps1`、`requirements-cpu.lock`、`requirements-gpu-cu128.lock`、`app` 和 `config`。
 5. 在资源管理器中打开 VIM2 根目录，点击地址栏，输入 `powershell` 后按 Enter。
 
 后续命令都在这个 PowerShell 窗口中执行。
 
 ## 5. 安装 Python 依赖
 
+先升级 pip：
+
 ```powershell
 python -m pip install --upgrade pip
-python -m pip install -r .\requirements.lock --extra-index-url https://download.pytorch.org/whl/cu128
 ```
 
-第二条命令会下载较多文件。完成后检查基础依赖：
+**根据使用模式只安装一份依赖，不要同时安装两份。**
+
+### CPU 模式
+
+不使用 NVIDIA GPU 时安装 CPU 依赖；此配置不安装 PyTorch CUDA、`bitsandbytes` 或 Qwen GPU 模型依赖：
 
 ```powershell
-python -c "import PySide6, numpy, sounddevice, soundfile; print('基础依赖正常')"
+python -m pip install -r .\requirements-cpu.lock
+python -c "import PySide6, numpy, sherpa_onnx, sounddevice, soundfile; print('CPU 依赖正常')"
 ```
 
-GPU 模式再检查 CUDA：
+### GPU 模式（CUDA 12.8）
+
+使用 NVIDIA GPU 时，确认驱动版本不低于 `570.65`，然后安装 GPU 依赖。此配置也包含 CPU 模型后端，可在应用中切换 CPU 模型；安装会下载较大的 CUDA/PyTorch 依赖：
 
 ```powershell
-python -c "import torch; print('PyTorch:', torch.__version__); print('CUDA 可用:', torch.cuda.is_available())"
+python -m pip install -r .\requirements-gpu-cu128.lock --extra-index-url https://download.pytorch.org/whl/cu128
+python -c "import torch, bitsandbytes, qwen_asr, transformers, webrtcvad; print('PyTorch:', torch.__version__); print('CUDA 可用:', torch.cuda.is_available())"
 ```
 
-GPU 模式必须显示 `CUDA 可用: True`。如果显示 `False`，请更新 NVIDIA 驱动并重启。
+GPU 模式必须显示 `CUDA 可用: True`。如果显示 `False`，请确认使用 NVIDIA 驱动并重启电脑。GPU 0.6B 的停顿感知预览需要的 `webrtcvad-wheels` 已包含在 GPU 依赖文件中；旧环境单独升级时可运行：
+
+```powershell
+python -m pip install webrtcvad-wheels==2.0.14.post1
+```
+
+CPU 依赖不含 `webrtcvad-wheels`；CPU 模式和 GPU 1.7B 不使用此预览检测。
 
 ## 6. 下载并放置模型
 

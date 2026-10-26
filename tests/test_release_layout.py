@@ -28,13 +28,41 @@ def test_release_preparation_uses_fixed_local_model_snapshots() -> None:
     assert "--target" not in script
     assert "runtime\\site-packages" not in script
     assert "pip install" not in script.lower()
+    assert "requirements-gpu-cu128.lock" in script
+
+
+def test_installation_documents_cpu_and_gpu_dependency_profiles() -> None:
+    instructions = (ROOT / "INSTALLATION.md").read_text(encoding="utf-8")
+
+    assert "requirements-cpu.lock" in instructions
+    assert "requirements-gpu-cu128.lock" in instructions
+    assert "requirements.lock" not in instructions
+    assert not (ROOT / "requirements.lock").exists()
+    assert not (ROOT / "requirements-cpu.txt").exists()
+
+
+def test_cpu_and_gpu_dependency_locks_are_separate() -> None:
+    cpu_lock = (ROOT / "requirements-cpu.lock").read_text(encoding="utf-8")
+    gpu_lock = (ROOT / "requirements-gpu-cu128.lock").read_text(
+        encoding="utf-8"
+    )
+
+    assert "PySide6==6.10.0" in cpu_lock
+    assert "sherpa-onnx==1.13.8" in cpu_lock
+    assert "torch==" not in cpu_lock
+    assert "bitsandbytes==" not in cpu_lock
+    assert "qwen-asr==" not in cpu_lock
+    assert "torch==2.11.0+cu128" in gpu_lock
+    assert "bitsandbytes==0.48.2" in gpu_lock
+    assert "qwen-asr==0.0.6" in gpu_lock
+    assert "webrtcvad-wheels==2.0.14.post1" in gpu_lock
 
 
 def test_release_manifest_and_dependency_lock_agree() -> None:
     manifest = json.loads(
         (ROOT / "release-manifest.json").read_text(encoding="utf-8")
     )
-    lock = (ROOT / "requirements.lock").read_text(
+    lock = (ROOT / "requirements-gpu-cu128.lock").read_text(
         encoding="utf-8"
     )
 

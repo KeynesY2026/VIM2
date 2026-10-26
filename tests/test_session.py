@@ -160,6 +160,169 @@ def test_draft_session_uses_bounded_context_and_verifies_whole_audio_without_sea
     assert recognizer.resets == 2
 
 
+def test_draft_preview_rests_after_completion_and_stop_never_waits(tmp_path, monkeypatch):
+    monkeypatch.setattr("webrtcvad.Vad.is_speech", lambda self, data, rate: any(data))
+    now = [0.5]
+    monkeypatch.setattr("vim2.session.monotonic", lambda: now[0], raising=False)
+    recorder = FakeRecorder(_long_artifact(tmp_path))
+    recorder.snapshot = lambda max_seconds=None: AudioArtifact(
+        np.full(16_000, 0.1, dtype=np.float32), 16_000,
+        start_frame=int(now[0] * 16_000),
+    )
+    recognizer = DraftRecognizer(["first", "second", "final"])
+    session = VoiceSession(_ready_machine(), recorder, recognizer, FakePaster())
+    session.start(target_window=42, model_id=ModelId.FAST)
+    assert session.preview() == "first"
+    now[0] = 5.49
+    assert session.preview() is None
+    now[0] = 5.5
+    assert session.preview() == "second"
+    assert session.stop() == "final"
+    assert recognizer.preview_calls == 2
+    assert recognizer.calls[-1][0] is recorder.artifact
+
+
+def test_draft_preview_flushes_pause_once_then_skips_silence(tmp_path, monkeypatch):
+    monkeypatch.setattr("webrtcvad.Vad.is_speech", lambda self, data, rate: any(data))
+    now = [1.0]
+    monkeypatch.setattr("vim2.session.monotonic", lambda: now[0], raising=False)
+    recorder = FakeRecorder(_long_artifact(tmp_path))
+    audio = np.concatenate((
+        np.full(16_000, 0.1, dtype=np.float32),
+        np.zeros(15 * 16_000, dtype=np.float32),
+    ))
+    recorder.snapshot = lambda max_seconds=None: AudioArtifact(
+        audio[max(0, int(now[0] * 16_000) - 15 * 16_000):int(now[0] * 16_000)],
+        16_000,
+        start_frame=max(0, int(now[0] * 16_000) - 15 * 16_000),
+    )
+    recognizer = DraftRecognizer(["first", "sentence end"])
+    session = VoiceSession(_ready_machine(), recorder, recognizer, FakePaster())
+    session.start(target_window=42, model_id=ModelId.FAST)
+    assert session.preview() == "first"
+    now[0] = 6.0
+    assert session.preview() == "sentence end"
+    now[0] = 11.0
+    assert session.preview() is None
+    now[0] = 16.0
+    assert session.preview() is None
+    assert recognizer.preview_calls == 2
+    assert session.state is AppState.RECORDING
+
+
+def test_draft_preview_error_is_throttled_but_retry_keeps_full_audio(tmp_path, monkeypatch):
+    now = [1.0]
+    monkeypatch.setattr("vim2.session.monotonic", lambda: now[0], raising=False)
+    recorder = FakeRecorder(_long_artifact(tmp_path))
+    recognizer = DraftRecognizer([RuntimeError("preview failed"), "recovered"])
+    session = VoiceSession(_ready_machine(), recorder, recognizer, FakePaster())
+    session.start(target_window=42, model_id=ModelId.FAST)
+    with pytest.raises(RuntimeError, match="preview failed"):
+        session.preview()
+    now[0] = 2.0
+    assert session.preview() is None
+    assert session.stop() == "recovered"
+    assert recognizer.calls[-1][0] is recorder.artifact
+
+
+def test_draft_preview_keeps_five_second_cadence_and_rest_after_completion(tmp_path, monkeypatch):
+    now = [1.0]
+    monkeypatch.setattr("vim2.session.monotonic", lambda: now[0], raising=False)
+    monkeypatch.setattr("webrtcvad.Vad.is_speech", lambda self, data, rate: any(data))
+    recorder = FakeRecorder(_long_artifact(tmp_path))
+    recorder.snapshot = lambda max_seconds=None: AudioArtifact(
+        np.full(16_000, 0.1, dtype=np.float32), 16_000,
+        start_frame=int(now[0] * 16_000),
+    )
+
+    class SlowRecognizer(DraftRecognizer):
+        def transcribe_preview(self, *args, **kwargs):
+            now[0] += 2.0
+            return super().transcribe_preview(*args, **kwargs)
+
+    recognizer = SlowRecognizer(["first", "second"])
+    session = VoiceSession(_ready_machine(), recorder, recognizer, FakePaster())
+    session.start(target_window=42, model_id=ModelId.FAST)
+    assert session.preview() == "first"
+    now[0] = 5.99
+    assert session.preview() is None
+    now[0] = 6.0
+    assert session.preview() == "second"
+
+
+def test_draft_preview_resumes_after_long_pause_and_audits_missed_quiet_speech(
+    tmp_path, monkeypatch
+):
+    now = [1.0]
+    monkeypatch.setattr("vim2.session.monotonic", lambda: now[0], raising=False)
+    monkeypatch.setattr("webrtcvad.Vad.is_speech", lambda self, data, rate: any(data))
+    recorder = FakeRecorder(_long_artifact(tmp_path))
+    recorder.snapshot = lambda max_seconds=None: AudioArtifact(
+        np.full(16_000, 0.0001 if now[0] == 76.0 else 0.1, dtype=np.float32),
+        16_000, start_frame=int(now[0] * 16_000),
+    )
+    recognizer = DraftRecognizer(["first", "resumed", "quiet audit"])
+    session = VoiceSession(_ready_machine(), recorder, recognizer, FakePaster())
+    session.start(target_window=42, model_id=ModelId.FAST)
+    assert session.preview() == "first"
+    now[0] = 61.0
+    assert session.preview() == "resumed"
+    monkeypatch.setattr("webrtcvad.Vad.is_speech", lambda self, data, rate: False)
+    now[0] = 66.0
+    assert session.preview() == "quiet audit"  # One sentence-end flush.
+    recognizer.responses.append("quiet audit")
+    now[0] = 76.0
+    assert session.preview() is None
+    now[0] = 81.0
+    assert session.preview() == "quiet audit"
+
+
+def test_missing_gpu_vad_does_not_leave_microphone_open(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "webrtcvad", None)
+    recorder = FakeRecorder(_long_artifact(tmp_path))
+    session = VoiceSession(
+        _ready_machine(), recorder, DraftRecognizer([]), FakePaster()
+    )
+    with pytest.raises(RuntimeError, match="webrtcvad-wheels"):
+        session.start(target_window=42, model_id=ModelId.FAST)
+    assert not recorder.started
+    assert session.state is AppState.READY
+
+
+def test_five_minute_pause_skips_inference_but_keeps_entire_final_audio(monkeypatch):
+    now = [1.0]
+    monkeypatch.setattr("vim2.session.monotonic", lambda: now[0])
+    monkeypatch.setattr("webrtcvad.Vad.is_speech", lambda self, data, rate: any(data))
+    source = np.concatenate((
+        np.full(16_000, 0.01, dtype=np.float32),
+        np.zeros(299 * 16_000, dtype=np.float32),
+    ))
+    full = AudioArtifact(source, 16_000)
+    recorder = FakeRecorder(full)
+
+    def snapshot(max_seconds=None):
+        end = int(now[0] * 16_000)
+        start = max(0, end - max_seconds * 16_000)
+        return AudioArtifact(source[start:end], 16_000, start_frame=start)
+
+    recorder.snapshot = snapshot
+    recognizer = DraftRecognizer(["first", "sentence end", "final"])
+    session = VoiceSession(_ready_machine(), recorder, recognizer, FakePaster())
+    session.start(target_window=42, model_id=ModelId.FAST)
+    assert session.preview() == "first"
+    now[0] = 6.0
+    assert session.preview() == "sentence end"
+    for half_second in range(13, 601):
+        now[0] = half_second / 2
+        assert session.preview() is None
+    assert recognizer.preview_calls == 2
+    assert session.stop() == "final"
+    assert recognizer.calls[-1][0] is full
+    assert full.frame_count == 4_800_000
+
+
 def test_draft_retry_clears_old_tokens_but_preserves_failed_recording(tmp_path):
     artifact = _artifact(tmp_path)
     recorder = FakeRecorder(artifact)

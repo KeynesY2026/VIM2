@@ -242,7 +242,8 @@ VIM2/
 ├── start.ps1
 ├── app/
 │   └── Python 应用代码
-├── requirements.lock
+├── requirements-cpu.lock
+├── requirements-gpu-cu128.lock
 ├── .models/
 │   ├── Qwen3-ASR-0.6B/
 │   └── Qwen3-ASR-1.7B-INT8/
@@ -269,7 +270,7 @@ VIM2/
 - `Start.cmd` 和 `start.ps1` 必须从自身所在目录解析所有相对路径，不得依赖用户当前工作目录。
 - `Start.cmd` 必须通过隐藏的 Windows PowerShell 和 `pythonw.exe` 启动，不得在桌面保留命令行窗口。
 - 启动脚本必须检查 Python 是否存在且版本兼容；图形启动失败时使用消息框显示明确错误。诊断入口使用 `python -m vim2 --check` 并保留控制台输出。
-- Python 第三方依赖使用全局 Python 环境，版本由根目录 `requirements.lock` 锁定；正常启动只验证依赖，不得执行 `pip install`。
+- Python 第三方依赖使用全局 Python 环境，CPU 与 GPU 依赖分别由根目录 `requirements-cpu.lock` 和 `requirements-gpu-cu128.lock` 锁定；正常启动只验证依赖，不得执行 `pip install`。
 - 正式应用的业务逻辑、托盘、悬浮窗、全局热键、录音、模型管理和自动粘贴均使用 Python 实现。
 
 `config/settings.json` 支持以下字段：

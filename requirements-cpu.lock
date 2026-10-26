@@ -1,0 +1,12 @@
+cffi==2.1.1
+numpy==2.5.3
+pycparser==3.0
+PySide6==6.10.0
+PySide6_Addons==6.10.0
+PySide6_Essentials==6.10.0
+sherpa-onnx==1.13.8
+sherpa-onnx-core==1.13.8
+shiboken6==6.10.0
+sounddevice==0.5.3
+soundfile==0.14.0
+typing_extensions==4.16.0

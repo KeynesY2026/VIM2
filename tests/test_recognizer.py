@@ -223,6 +223,32 @@ def test_failed_preview_keeps_last_draft_and_restores_generator(tmp_path, monkey
     assert loader.models[0].model.generate == original_generate
 
 
+def test_final_uses_latest_successful_draft_without_pooling_windows(tmp_path, monkeypatch):
+    decoders = []
+
+    class WindowDecoder(FakeDraftDecoder):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            decoders.append(self)
+
+        def generate(self):
+            self.tokens = (10 * len(decoders), 10 * len(decoders) + 1, 151645)
+
+    monkeypatch.setattr("vim2.draft.GpuDraftDecoder", WindowDecoder)
+    recognizer, _, _ = _recognizer(tmp_path)
+    recognizer.load(ModelId.FAST)
+    artifact = AudioArtifact(np.zeros(16_000, dtype=np.float32), 16_000)
+    recognizer.transcribe_preview(artifact, ModelId.FAST)
+    recognizer.transcribe_preview(artifact, ModelId.FAST)
+    recognizer.transcribe_final(artifact, ModelId.FAST)
+
+    assert decoders[1].draft == (10, 11, 151645)
+    assert decoders[2].draft == (20, 21, 151645)
+    recognizer.reset_live_draft()
+    recognizer.transcribe_final(artifact, ModelId.FAST)
+    assert decoders[-1].draft == ()
+
+
 def test_draft_capability_is_gated_to_validated_gpu_model(tmp_path):
     recognizer, _, _ = _recognizer(tmp_path)
     assert not recognizer.supports_live_draft
