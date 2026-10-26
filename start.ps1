@@ -41,4 +41,10 @@ $env:HF_HOME = Join-Path $Root "temp\huggingface"
 $env:PYTHONPATH = Join-Path $Root "app"
 
 $Arguments = @("-m", "vim2", "--windowed")
-& $Pythonw $Arguments
+try {
+    Start-Process -FilePath $Pythonw -ArgumentList $Arguments -WorkingDirectory $Root
+} catch {
+    Show-StartupError "Cannot start VIM2: $($_.Exception.Message)"
+    exit 1
+}
+exit 0

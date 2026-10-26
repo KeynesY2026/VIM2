@@ -25,6 +25,71 @@ def _app() -> QApplication:
     return QApplication.instance() or QApplication([])
 
 
+def test_microphone_menu_shows_actual_input_and_allows_session_selection(
+    monkeypatch,
+) -> None:
+    from test_audio import ReloadableSoundDevice
+    from vim2.audio import AudioRecorder
+
+    _app()
+    backend = ReloadableSoundDevice()
+    recorder = AudioRecorder(sounddevice=backend)
+    view = DesktopView()
+    view.bind_microphones(recorder)
+    view.render_state(AppState.READY, ModelId.CPU)
+    view.menu.aboutToShow.emit()
+
+    assert "Mic A" in view.microphone_menu.title()
+    actions = view.microphone_menu.actions()
+    assert [action.text() for action in actions] == [
+        "跟随 Windows 默认", "Mic A（系统默认）", "Mic B"
+    ]
+    assert actions[0].isChecked()
+    actions[-1].trigger()
+    assert not recorder.follows_default
+    assert "Mic B" in view.microphone_menu.title()
+    assert view.microphone_menu.actions()[-1].isChecked()
+    assert view.microphone_menu.actions()[1].text() == "Mic A（系统默认）"
+    assert not view.microphone_menu.actions()[1].isChecked()
+
+    backend.default_index = 1
+    view.menu.aboutToShow.emit()
+    assert [action.text() for action in view.microphone_menu.actions()] == [
+        "跟随 Windows 默认", "Mic A", "Mic B（系统默认）"
+    ]
+
+    recorder.start()
+    view.render_state(AppState.RECORDING, ModelId.CPU)
+    calls = list(backend.calls)
+    view.menu.aboutToShow.emit()
+    assert backend.calls == calls
+    assert "Mic B" in view.microphone_menu.title()
+    assert all(not action.isEnabled() for action in view.microphone_menu.actions())
+    recorder.cancel()
+    view.overlay.close()
+
+
+def test_microphone_menu_reports_enumeration_errors(monkeypatch) -> None:
+    from test_audio import ReloadableSoundDevice
+    from vim2.audio import AudioRecorder
+
+    _app()
+    backend = ReloadableSoundDevice(
+        fail_initialize=RuntimeError("device enumeration failed")
+    )
+    view = DesktopView()
+    view.bind_microphones(AudioRecorder(sounddevice=backend))
+    view.render_state(AppState.READY, ModelId.CPU)
+    warnings = []
+    monkeypatch.setattr(view, "show_warning", warnings.append)
+
+    view.menu.aboutToShow.emit()
+
+    assert warnings and "device enumeration failed" in warnings[0]
+    assert "不可用" in view.microphone_menu.title()
+    view.overlay.close()
+
+
 def test_tray_icon_is_16px_transparent_canvas_with_12px_state_dot() -> None:
     _app()
     image = TrayIconFactory.create(AppState.READY).pixmap(16, 16).toImage()

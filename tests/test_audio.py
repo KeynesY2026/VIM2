@@ -33,6 +33,28 @@ class FakeInputStream:
 class FakeSoundDevice:
     def __init__(self) -> None:
         self.stream: FakeInputStream | None = None
+        self.devices = [
+            {"name": "Mic A", "hostapi": 0, "max_input_channels": 1},
+            {"name": "Mic B", "hostapi": 0, "max_input_channels": 1},
+            {"name": "Speakers", "hostapi": 0, "max_input_channels": 0},
+        ]
+        self.default_index = 0
+
+    def query_devices(self, device=None, kind=None):
+        if kind == "input":
+            return self.devices[self.default_index]
+        if device is not None:
+            return self.devices[device]
+        return self.devices
+
+    def query_hostapis(self):
+        return [
+            {"name": "Windows WASAPI", "default_input_device": self.default_index}
+        ]
+
+    @staticmethod
+    def WasapiSettings(**kwargs):
+        return kwargs
 
     def InputStream(self, **kwargs) -> FakeInputStream:
         self.stream = FakeInputStream(**kwargs)
@@ -96,6 +118,218 @@ def test_start_opens_stream_without_reloading_devices() -> None:
 
     assert backend.calls == ["InputStream"]
     recorder.cancel()
+
+
+def test_choices_only_include_connected_wasapi_inputs(monkeypatch) -> None:
+    backend = ReloadableSoundDevice()
+    monkeypatch.setattr(
+        backend,
+        "query_hostapis",
+        lambda: [
+            {"name": "Windows WASAPI", "default_input_device": 0},
+            {"name": "MME", "default_input_device": 3},
+            {"name": "Windows DirectSound", "default_input_device": 5},
+            {"name": "Windows WDM-KS", "default_input_device": 4},
+        ],
+    )
+    backend.devices.extend([
+        {"name": "Mic A", "hostapi": 1, "max_input_channels": 1},
+        {"name": "Unplugged microphone", "hostapi": 3, "max_input_channels": 1},
+        {"name": "Mic A", "hostapi": 2, "max_input_channels": 1},
+    ])
+    backend.default_index = 3
+    recorder = AudioRecorder(sounddevice=backend)
+
+    devices = recorder.input_devices()
+
+    assert [(device.name, device.host_api) for device in devices] == [
+        ("Mic A", "Windows WASAPI"),
+        ("Mic B", "Windows WASAPI"),
+    ]
+    assert recorder.input_devices_cached == devices
+    assert [device.name for device in devices if device.is_default] == ["Mic A"]
+    recorder.start()
+    assert recorder.current_input.name == "Mic A"
+    assert recorder.current_input.host_api == "MME"
+    assert backend.stream.kwargs["device"] is None
+    assert recorder.input_devices() == devices
+    recorder.stop()
+    recorder.select_input(devices[1])
+    recorder.start()
+    assert backend.stream.kwargs["device"] == 1
+    recorder.cancel()
+
+
+def test_disconnected_wasapi_input_disappears_on_refresh() -> None:
+    backend = ReloadableSoundDevice()
+    recorder = AudioRecorder(sounddevice=backend)
+    recorder.input_devices()
+    backend.devices.pop(1)
+
+    assert [device.name for device in recorder.input_devices()] == ["Mic A"]
+    assert [device.name for device in recorder.input_devices_cached] == ["Mic A"]
+
+
+def test_default_marker_refreshes_independently_of_manual_selection() -> None:
+    backend = ReloadableSoundDevice()
+    recorder = AudioRecorder(sounddevice=backend)
+    recorder.select_input(recorder.input_devices()[1])
+
+    assert [
+        device.name for device in recorder.input_devices_cached if device.is_default
+    ] == ["Mic A"]
+    backend.default_index = 1
+    devices = recorder.input_devices()
+    assert [device.name for device in devices if device.is_default] == ["Mic B"]
+
+
+def test_missing_system_default_does_not_mark_an_arbitrary_input() -> None:
+    backend = ReloadableSoundDevice()
+    backend.default_index = -1
+    recorder = AudioRecorder(sounddevice=backend)
+
+    assert not any(device.is_default for device in recorder.input_devices())
+
+
+def test_default_change_refreshes_even_when_old_microphone_still_opens() -> None:
+    backend = ReloadableSoundDevice()
+    default_id = [b"a"]
+    recorder = AudioRecorder(
+        sounddevice=backend, default_input_id=lambda: default_id[0]
+    )
+    recorder.start()
+    recorder.stop()
+    default_id[0] = b"b"
+    backend.default_index = 1
+
+    recorder.start()
+
+    assert backend.calls == [
+        "InputStream", "terminate", "initialize", "InputStream"
+    ]
+    assert recorder.current_input.name == "Mic B"
+    recorder.cancel()
+
+
+def test_manual_selection_survives_recordings_but_not_system_default_change() -> None:
+    backend = ReloadableSoundDevice()
+    default_id = [b"a"]
+    recorder = AudioRecorder(
+        sounddevice=backend, default_input_id=lambda: default_id[0]
+    )
+    devices = recorder.input_devices()
+    assert [device.name for device in devices] == ["Mic A", "Mic B"]
+    recorder.select_input(devices[1])
+    for _ in range(2):
+        recorder.start()
+        assert backend.stream.kwargs["device"] == 1
+        assert recorder.current_input.name == "Mic B"
+        recorder.stop()
+
+    default_id[0] = b"new-default"
+    recorder.start()
+    assert backend.stream.kwargs["device"] is None
+    assert recorder.follows_default
+    assert recorder.current_input.name == "Mic A"
+    recorder.cancel()
+
+
+def test_manual_selection_resolves_new_indices_and_never_opens_other_device() -> None:
+    backend = ReloadableSoundDevice()
+    recorder = AudioRecorder(sounddevice=backend)
+    recorder.select_input(recorder.input_devices()[1])
+    backend.devices[0], backend.devices[1] = backend.devices[1], backend.devices[0]
+
+    recorder.start()
+    assert backend.stream.kwargs["device"] == 0
+    recorder.stop()
+    backend.devices = [backend.devices[1]]
+
+    with pytest.raises(RuntimeError, match="selected microphone"):
+        recorder.start()
+    assert recorder.current_input is None
+
+
+def test_unchanged_default_only_checks_identity_without_reinitializing() -> None:
+    backend = ReloadableSoundDevice()
+    recorder = AudioRecorder(sounddevice=backend, default_input_id=lambda: b"a")
+
+    for _ in range(2):
+        recorder.start()
+        recorder.stop()
+
+    assert backend.calls == ["InputStream", "InputStream"]
+
+
+def test_ambiguous_manual_device_is_rejected_instead_of_picking_another() -> None:
+    backend = ReloadableSoundDevice()
+    recorder = AudioRecorder(sounddevice=backend)
+    device = recorder.input_devices()[1]
+    backend.devices.append(dict(backend.devices[1]))
+
+    with pytest.raises(RuntimeError, match="ambiguous"):
+        recorder.select_input(device)
+    assert recorder.follows_default
+
+
+def test_selection_wraps_native_refresh_error() -> None:
+    class NativeAudioError(Exception):
+        pass
+
+    backend = ReloadableSoundDevice()
+    backend.PortAudioError = NativeAudioError
+    default_id = [b"a"]
+    recorder = AudioRecorder(
+        sounddevice=backend, default_input_id=lambda: default_id[0]
+    )
+    device = recorder.input_devices()[1]
+    default_id[0] = b"b"
+    backend.fail_initialize = NativeAudioError("native refresh failed")
+
+    with pytest.raises(RuntimeError, match="native refresh failed"):
+        recorder.select_input(device)
+
+
+def test_wasapi_uses_shared_mode_conversion_for_16khz_recording() -> None:
+    backend = ReloadableSoundDevice()
+    recorder = AudioRecorder(sounddevice=backend)
+    recorder.select_input(recorder.input_devices()[1])
+
+    recorder.start()
+
+    assert backend.stream.kwargs["extra_settings"] == {"auto_convert": True}
+    assert backend.stream.kwargs["samplerate"] == 16_000
+    recorder.cancel()
+
+
+def test_cannot_reload_or_select_microphone_during_recording() -> None:
+    backend = ReloadableSoundDevice()
+    recorder = AudioRecorder(sounddevice=backend)
+    devices = recorder.input_devices()
+    recorder.start()
+    calls = list(backend.calls)
+
+    assert recorder.input_devices() == devices
+    assert backend.calls == calls
+    with pytest.raises(RuntimeError, match="recording"):
+        recorder.select_input(devices[1])
+    recorder.cancel()
+
+
+def test_follow_default_and_new_recorder_do_not_keep_manual_selection() -> None:
+    backend = ReloadableSoundDevice()
+    recorder = AudioRecorder(sounddevice=backend)
+    recorder.select_input(recorder.input_devices()[1])
+    recorder.select_input(None)
+    recorder.start()
+    assert backend.stream.kwargs["device"] is None
+    recorder.stop()
+    recorder.select_input(recorder.input_devices()[1])
+
+    fresh_recorder = AudioRecorder(sounddevice=backend)
+    fresh_recorder.start()
+    assert backend.stream.kwargs["device"] is None
+    fresh_recorder.cancel()
 
 
 def test_start_reloads_devices_and_retries_when_open_fails() -> None:

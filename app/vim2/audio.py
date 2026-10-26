@@ -2,12 +2,26 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class InputDevice:
+    index: int
+    name: str
+    host_api: str
+    is_default: bool = False
+
+    @property
+    def key(self) -> tuple[str, str]:
+        # PortAudio indices can change after re-enumeration.
+        return self.host_api, self.name
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -36,6 +50,7 @@ class AudioRecorder:
         *,
         sounddevice: Any | None = None,
         sample_rate: int = 16_000,
+        default_input_id: Callable[[], bytes] | None = None,
     ) -> None:
         if sounddevice is None:
             import sounddevice
@@ -50,6 +65,103 @@ class AudioRecorder:
         self._lock = threading.Lock()
         self._accepting_audio = False
         self._sealed = False
+        self._default_input_id = default_input_id
+        self._last_default_id = (
+            default_input_id() if default_input_id is not None else None
+        )
+        self._selected_input: InputDevice | None = None
+        self._current_input: InputDevice | None = None
+        self._inputs: tuple[InputDevice, ...] = ()
+
+    @property
+    def current_input(self) -> InputDevice | None:
+        return self._current_input
+
+    @property
+    def follows_default(self) -> bool:
+        return self._selected_input is None
+
+    @property
+    def input_devices_cached(self) -> tuple[InputDevice, ...]:
+        # WASAPI enumerates active Windows endpoints, without legacy API aliases.
+        return tuple(
+            device for device in self._inputs
+            if device.host_api == "Windows WASAPI"
+        )
+
+    def _sync_default_input(self) -> bool:
+        if self._default_input_id is None:
+            return False
+        current_id = self._default_input_id()
+        if current_id == self._last_default_id:
+            return False
+        self._reload_devices()
+        self._selected_input = None
+        self._last_default_id = current_id
+        return True
+
+    def _read_inputs(self) -> None:
+        apis = self._sounddevice.query_hostapis()
+        self._inputs = tuple(
+            InputDevice(
+                index,
+                device["name"],
+                apis[device["hostapi"]]["name"],
+                is_default=index == apis[device["hostapi"]]["default_input_device"],
+            )
+            for index, device in enumerate(self._sounddevice.query_devices())
+            if device["max_input_channels"] > 0
+        )
+
+    def _resolve_input(self) -> InputDevice:
+        self._read_inputs()
+        if self._selected_input is None:
+            device = self._sounddevice.query_devices(kind="input")
+            apis = self._sounddevice.query_hostapis()
+            key = (apis[device["hostapi"]]["name"], device["name"])
+        else:
+            key = self._selected_input.key
+        matches = [device for device in self._inputs if device.key == key]
+        if not matches or (self._selected_input is not None and len(matches) != 1):
+            raise RuntimeError(
+                "The selected microphone is unavailable or ambiguous; "
+                "select an input device from the tray menu"
+            )
+        return matches[0]
+
+    def input_devices(self) -> tuple[InputDevice, ...]:
+        if self._stream is not None or self._sealed:
+            return self.input_devices_cached
+        portaudio_error = getattr(self._sounddevice, "PortAudioError", RuntimeError)
+        try:
+            if not self._sync_default_input():
+                self._reload_devices()
+            try:
+                self._current_input = self._resolve_input()
+            except (OSError, RuntimeError, portaudio_error) as exc:
+                self._current_input = None
+                logger.warning("Cannot resolve the microphone: %s", exc)
+            return self.input_devices_cached
+        except (OSError, RuntimeError, portaudio_error) as exc:
+            self._current_input = None
+            logger.exception("Cannot enumerate microphones")
+            raise RuntimeError(f"Cannot enumerate microphones: {exc}") from exc
+
+    def select_input(self, device: InputDevice | None) -> None:
+        if self._stream is not None or self._sealed:
+            raise RuntimeError("Cannot switch microphone during a recording")
+        previous = self._selected_input
+        portaudio_error = getattr(self._sounddevice, "PortAudioError", RuntimeError)
+        try:
+            self._sync_default_input()
+            previous = self._selected_input
+            self._selected_input = device
+            current = self._resolve_input()
+        except (OSError, RuntimeError, portaudio_error) as exc:
+            self._selected_input = previous
+            logger.exception("Cannot select microphone")
+            raise RuntimeError(f"Cannot select microphone: {exc}") from exc
+        self._current_input = current
 
     def start(self) -> None:
         if self._stream is not None or self._sealed:
@@ -62,38 +174,54 @@ class AudioRecorder:
             self._sounddevice, "PortAudioError", RuntimeError
         )
         try:
-            stream = self._open_default_input()
+            self._sync_default_input()
+            stream = self._open_input()
         except (OSError, RuntimeError, portaudio_error) as initial_error:
             # A microphone plugged in after VIM2 started stays invisible to
             # PortAudio, so re-enumerate devices once and retry before
             # giving up.
             logger.info(
-                "Could not open the default microphone, reloading devices: %s",
+                "Could not open the microphone, reloading devices: %s",
                 initial_error,
             )
             try:
                 self._reload_devices()
-                stream = self._open_default_input()
+                self._sync_default_input()
+                stream = self._open_input()
             except (OSError, RuntimeError, portaudio_error) as exc:
                 self._accepting_audio = False
+                self._current_input = None
+                description = (
+                    "the current Windows default microphone"
+                    if self.follows_default
+                    else "the selected microphone"
+                )
                 logger.exception(
-                    "Cannot open the current Windows default microphone: %s",
+                    "Cannot open %s: %s",
+                    description,
                     exc,
                 )
                 raise RuntimeError(
-                    f"Cannot open the current Windows default microphone: {exc}"
+                    f"Cannot open {description}: {exc}"
                 ) from exc
         self._stream = stream
 
-    def _open_default_input(self):
-        """Open and start a stream on the current default input device."""
+    def _open_input(self):
+        """Resolve the current selection against the latest device indices."""
+        device = self._resolve_input()
+        extra_settings = (
+            self._sounddevice.WasapiSettings(auto_convert=True)
+            if device.host_api == "Windows WASAPI"
+            else None
+        )
         stream = self._sounddevice.InputStream(
-            device=None,
+            device=None if self.follows_default else device.index,
             samplerate=self._sample_rate,
             channels=1,
             dtype="float32",
             blocksize=0,
             latency="high",
+            extra_settings=extra_settings,
             callback=self._on_audio,
         )
         try:
@@ -101,6 +229,7 @@ class AudioRecorder:
         except Exception:
             stream.close()
             raise
+        self._current_input = device
         return stream
 
     def _reload_devices(self) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import math
 import time
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from vim2.audio import AudioRecorder, InputDevice
 from vim2.models import MODEL_SPECS, ModelId
 from vim2.state import AppState
 
@@ -394,6 +396,9 @@ class DesktopView:
         self.status_action = QAction("VIM2：启动中")
         self.status_action.setEnabled(False)
         self.model_menu = self.menu.addMenu("识别模型")
+        self.microphone_menu = self.menu.addMenu("麦克风：待检测")
+        self._recorder: AudioRecorder | None = None
+        self._microphone_selection_enabled = False
         self.cpu_model_action = QAction(
             "CPU：Qwen3-ASR 0.6B INT8", self.model_menu
         )
@@ -467,6 +472,62 @@ class DesktopView:
     def show(self) -> None:
         self.tray.show()
 
+    def bind_microphones(self, recorder: AudioRecorder) -> None:
+        self._recorder = recorder
+        self.menu.aboutToShow.connect(self._refresh_microphones)
+
+    def _refresh_microphones(self) -> None:
+        if self._recorder is None:
+            return
+        if self._microphone_selection_enabled:
+            try:
+                self._recorder.input_devices()
+            except RuntimeError as exc:
+                self.show_warning(f"无法刷新麦克风列表：{exc}")
+                self.microphone_menu.clear()
+                self.microphone_menu.setTitle("麦克风：不可用")
+                return
+        self._render_microphones()
+
+    def _render_microphones(self) -> None:
+        recorder = self._recorder
+        if recorder is None:
+            return
+        current = recorder.current_input
+        name = current.name if current is not None else "不可用"
+        self.microphone_menu.setTitle(f"麦克风：{name}")
+        # Do not enumerate or reinitialize PortAudio while a stream is open.
+        self.microphone_menu.clear()
+        default_action = self.microphone_menu.addAction("跟随 Windows 默认")
+        default_action.setCheckable(True)
+        default_action.setChecked(recorder.follows_default)
+        default_action.setEnabled(self._microphone_selection_enabled)
+        default_action.triggered.connect(lambda: self._select_microphone(None))
+        if not self._microphone_selection_enabled:
+            return
+        for device in recorder.input_devices_cached:
+            label = f"{device.name}（系统默认）" if device.is_default else device.name
+            action = self.microphone_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(
+                not recorder.follows_default
+                and current is not None
+                and device.key == current.key
+            )
+            action.triggered.connect(
+                lambda _checked=False, selected=device: self._select_microphone(selected)
+            )
+
+    def _select_microphone(self, device: InputDevice | None) -> None:
+        if self._recorder is None or not self._microphone_selection_enabled:
+            return
+        try:
+            self._recorder.select_input(device)
+        except RuntimeError as exc:
+            logging.getLogger(__name__).exception("Microphone selection failed")
+            self.show_warning(f"无法切换麦克风：{exc}")
+        self._render_microphones()
+
     def render_state(self, state: AppState, model_id: ModelId) -> None:
         capabilities = UiCapabilities.for_state(state)
         self.tray.setIcon(TrayIconFactory.create(state))
@@ -483,6 +544,8 @@ class DesktopView:
         self.fast_model_action.setChecked(model_id is ModelId.FAST)
         self.accurate_model_action.setChecked(model_id is ModelId.ACCURATE)
         self.reload_hotwords_action.setEnabled(state is AppState.READY)
+        self._microphone_selection_enabled = state is AppState.READY
+        self._render_microphones()
 
         if state is AppState.MODEL_LOADING:
             self.overlay.set_message(

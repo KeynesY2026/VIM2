@@ -1,5 +1,12 @@
 import json
+import os
+import shutil
+import subprocess
+import sys
+import time
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -12,6 +19,80 @@ def test_windowed_launcher_uses_hidden_windows_powershell() -> None:
     assert "-WindowStyle Hidden" in launcher
     assert "pythonw.exe" in script
     assert "-m\", \"vim2\", \"--windowed\"" in script
+
+
+@pytest.mark.skipif(
+    os.name != "nt" or shutil.which("powershell.exe") is None,
+    reason="Requires Windows PowerShell and pythonw.exe",
+)
+def test_launcher_exits_without_waiting_for_the_windowed_app(tmp_path: Path) -> None:
+    root = tmp_path / "portable app with spaces"
+    module = root / "app" / "vim2"
+    module.mkdir(parents=True)
+    shutil.copyfile(ROOT / "start.ps1", root / "start.ps1")
+    (module / "__main__.py").write_text(
+        "import json, os, sys, time\n"
+        "from pathlib import Path\n"
+        "root = Path(__file__).resolve().parents[2]\n"
+        "(root / 'started.json').write_text(json.dumps({\n"
+        "    'cwd': os.getcwd(), 'args': sys.argv[1:],\n"
+        "    'pythonpath': os.environ.get('PYTHONPATH'),\n"
+        "    'hf_home': os.environ.get('HF_HOME'),\n"
+        "    'offline': os.environ.get('HF_HUB_OFFLINE'),\n"
+        "    'transformers_offline': os.environ.get('TRANSFORMERS_OFFLINE'),\n"
+        "}), encoding='utf-8')\n"
+        "deadline = time.monotonic() + 60\n"
+        "while not (root / 'release').exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.05)\n"
+        "(root / 'finished').touch()\n",
+        encoding="utf-8",
+    )
+    python = sys.executable.replace("'", "''")
+    script = str(root / "start.ps1").replace("'", "''")
+    harness = root / "launch.ps1"
+    harness.write_text(
+        "function Get-Command {\n"
+        "    [CmdletBinding()]\n"
+        "    param([string]$Name)\n"
+        f"    [pscustomobject]@{{ Source = '{python}' }}\n"
+        "}\n"
+        f"& '{script}'\n",
+        encoding="utf-8",
+    )
+
+    def wait_for_file(path: Path) -> None:
+        deadline = time.monotonic() + 10
+        while not path.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert path.exists(), f"Launcher child did not create {path.name}"
+
+    with (root / "launcher.log").open("w", encoding="utf-8") as log:
+        launcher = subprocess.Popen(
+            [
+                "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass", "-File", str(harness),
+            ],
+            cwd=tmp_path,
+            stdout=log,
+            stderr=log,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        try:
+            assert launcher.wait(timeout=10) == 0
+            wait_for_file(root / "started.json")
+            assert not (root / "finished").exists()
+            started = json.loads((root / "started.json").read_text(encoding="utf-8"))
+            assert Path(started["cwd"]) == root
+            assert started["args"] == ["--windowed"]
+            assert Path(started["pythonpath"]) == root / "app"
+            assert Path(started["hf_home"]) == root / "temp" / "huggingface"
+            assert started["offline"] == "1"
+            assert started["transformers_offline"] == "1"
+        finally:
+            (root / "release").touch()
+            launcher.wait(timeout=10)
+            if (root / "started.json").exists():
+                wait_for_file(root / "finished")
 
 
 def test_release_preparation_uses_fixed_local_model_snapshots() -> None:

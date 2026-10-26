@@ -18,6 +18,7 @@ from PySide6.QtCore import (
     Slot,
 )
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
+from PySide6.QtMultimedia import QMediaDevices
 
 from vim2.application import SingleInstanceGuard
 from vim2.audio import AudioRecorder
@@ -214,7 +215,10 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
 
     machine = StateMachine()
     recognizer = QwenRecognizer(paths)
-    recorder = AudioRecorder()
+    media_devices = QMediaDevices(app)
+    recorder = AudioRecorder(
+        default_input_id=lambda: bytes(media_devices.defaultAudioInput().id())
+    )
     bridge = _HotkeyBridge()
     dispatcher = HotkeyDispatcher(
         parse_hotkey(settings.hotkey),
@@ -261,6 +265,7 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
     bridge.toggle_requested.connect(controller.toggle_recording)
     bridge.cancel_requested.connect(controller.cancel)
     view.bind(controller, app.quit)
+    view.bind_microphones(recorder)
 
     try:
         hotkey.start()

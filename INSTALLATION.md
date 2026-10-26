@@ -194,4 +194,4 @@ python -m vim2 --check
 - **CUDA unavailable：** 执行 `nvidia-smi` 和 `python -c "import torch; print(torch.cuda.is_available())"`，更新驱动并重启；无 NVIDIA 显卡请改用 CPU 模型。
 - **Hugging Face 下载失败：** 重新运行同一命令会复用已完成文件。也可在另一台联网电脑下载完整模型目录后复制到 `.models`。
 - **CPU 模型仍报 GPU 错误：** 确认配置中的 `selected_model` 是 `qwen3-asr-0.6b-int8-cpu`。
-- **录音没有声音：** 在 Windows 的 **设置 > 系统 > 声音 > 输入** 中选择默认麦克风，并允许桌面应用访问。
+- **录音没有声音：** 右键 VIM2 托盘图标，在“麦克风”菜单查看当前输入，可临时选择其他麦克风或恢复“跟随 Windows 默认”。也可以在 Windows 的 **设置 > 系统 > 声音 > 输入** 中更改默认麦克风，下一次录音生效。请同时允许桌面应用访问麦克风。
