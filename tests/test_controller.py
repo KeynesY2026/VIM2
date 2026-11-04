@@ -56,6 +56,9 @@ class FakeLifecycleRecognizer:
         self.loaded.append(model_id)
         self.loaded_model = model_id
 
+    def debug_context(self) -> dict[str, object]:
+        return {"hotwords": [], "draft_tokens": []}
+
     def switch(self, model_id: ModelId) -> None:
         self.switched.append(model_id)
         if self.switch_error is not None:
@@ -208,6 +211,40 @@ def _controller(tmp_path: Path, responses: list[str | Exception]):
         foreground_window=lambda: 321,
     )
     return controller, recognizer, recorder, paster, view, repository
+
+
+def test_export_failed_recording_reports_success_and_keeps_retry_available(tmp_path):
+    controller, _, _, paster, view, _ = _controller(
+        tmp_path, [RuntimeError("decode failed"), "recovered"]
+    )
+    controller.start()
+    controller.toggle_recording()
+    controller.toggle_recording()
+
+    destination = tmp_path / "failure.zip"
+    assert controller.export_failed_recording(destination)
+    assert destination.is_file()
+    assert view.infos and str(destination) in view.infos[-1]
+    assert controller.state is AppState.RETRY_PENDING
+    assert paster.calls == []
+    controller.retry()
+    assert controller.state is AppState.READY
+
+
+def test_export_failed_recording_reports_io_error_without_discarding_audio(tmp_path):
+    controller, _, recorder, _, view, _ = _controller(
+        tmp_path, [RuntimeError("decode failed"), "recovered"]
+    )
+    controller.start()
+    controller.toggle_recording()
+    controller.toggle_recording()
+
+    assert not controller.export_failed_recording(tmp_path / "missing" / "case.zip")
+    assert view.errors and "导出失败" in view.errors[-1]
+    assert controller.state is AppState.RETRY_PENDING
+    assert recorder.discarded == []
+    controller.retry()
+    assert controller.state is AppState.READY
 
 
 def test_cross_backend_model_switch_restarts_without_loading_both_runtimes(

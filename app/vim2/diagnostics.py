@@ -1,18 +1,74 @@
 from __future__ import annotations
 
 import faulthandler
+import io
+import json
 import logging
 import sys
+import tempfile
 import threading
+import zipfile
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import ModuleType
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
 
 from vim2.paths import AppPaths
 
+if TYPE_CHECKING:
+    from vim2.audio import AudioArtifact
+
 
 _fault_stream: TextIO | None = None
+
+
+def write_failure_case(
+    destination: Path, audio: AudioArtifact, details: dict[str, object],
+) -> None:
+    import soundfile
+
+    metadata = {
+        **details,
+        "audio": {
+            "file": "audio.wav",
+            "sample_rate": audio.sample_rate,
+            "frames": audio.frame_count,
+            "start_frame": audio.start_frame,
+            "warnings": list(audio.warnings),
+        },
+        "environment": {
+            "python": sys.version,
+            "loaded_package_versions": {
+                name: module.__version__
+                for name in (
+                    "numpy", "soundfile", "torch", "transformers",
+                    "qwen_asr", "sherpa_onnx",
+                )
+                if (module := sys.modules.get(name)) is not None
+                and isinstance(getattr(module, "__version__", None), str)
+            },
+        },
+    }
+    with tempfile.NamedTemporaryFile(
+        dir=destination.parent, prefix=".vim2-failure-", suffix=".tmp",
+        delete=False,
+    ) as stream:
+        temporary = Path(stream.name)
+    try:
+        with io.BytesIO() as wav:
+            # Float WAV preserves the original samples without PCM quantization.
+            soundfile.write(
+                wav, audio.samples, audio.sample_rate, format="WAV", subtype="FLOAT"
+            )
+            with zipfile.ZipFile(temporary, "w") as archive:
+                archive.writestr("audio.wav", wav.getvalue())
+                archive.writestr(
+                    "metadata.json",
+                    json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+                )
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def configure_runtime_logging(

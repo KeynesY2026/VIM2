@@ -5,6 +5,8 @@ import logging
 import math
 import time
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import (
     QEasingCurve,
@@ -19,6 +21,7 @@ from PySide6.QtGui import QColor, QCursor, QIcon, QPainter, QPixmap
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication,
+    QFileDialog,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
@@ -639,12 +642,38 @@ class DesktopView:
         retry_button = dialog.addButton(
             "重试", QMessageBox.ButtonRole.AcceptRole
         )
+        export_button = dialog.addButton(
+            "导出调试案例", QMessageBox.ButtonRole.ActionRole
+        )
         dialog.addButton("放弃", QMessageBox.ButtonRole.RejectRole)
-        dialog.exec()
-        if dialog.clickedButton() is retry_button:
-            self._controller.retry()
-        else:
-            self._controller.cancel()
+        dialog.setInformativeText(
+            "可手动导出原始录音、热词及识别上下文，仅保存到本机。\n"
+            "放弃或退出后无法导出；分享调试案例前请确认其中的隐私内容。"
+        )
+        while True:
+            dialog.exec()
+            clicked = dialog.clickedButton()
+            if clicked is export_button:
+                filename, _ = QFileDialog.getSaveFileName(
+                    dialog, "导出失败识别调试案例",
+                    f"vim2-failure-{datetime.now():%Y%m%d-%H%M%S}.zip",
+                    "ZIP (*.zip)",
+                )
+                if filename:
+                    if self._controller.export_failed_recording(Path(filename)):
+                        dialog.setInformativeText(
+                            f"调试案例已保存：{filename}\n仍可重试或放弃。"
+                        )
+                    else:
+                        dialog.setInformativeText(
+                            "导出失败，录音仍保留。请检查保存位置和磁盘空间后重试导出。"
+                        )
+                continue
+            if clicked is retry_button:
+                self._controller.retry()
+            else:
+                self._controller.cancel()
+            return
 
     def hide_overlay(self) -> None:
         self._error_hide_timer.stop()

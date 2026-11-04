@@ -184,6 +184,25 @@ class FakeDraftDecoder:
         return None
 
 
+def test_debug_context_captures_successful_draft_and_hotwords(tmp_path, monkeypatch):
+    monkeypatch.setattr("vim2.draft.GpuDraftDecoder", FakeDraftDecoder)
+    recognizer, _, _ = _recognizer(tmp_path)
+    recognizer.load(ModelId.FAST)
+    hotwords_path = tmp_path / "config" / "hotwords.txt"
+    hotwords_path.write_text("VIM2\nQwen\n", encoding="utf-8")
+    recognizer.reload_hotwords()
+    recognizer.transcribe_preview(
+        AudioArtifact(np.zeros(16_000, dtype=np.float32), 16_000), ModelId.FAST
+    )
+
+    context = recognizer.debug_context()
+    recognizer.reset_live_draft()
+
+    assert context["hotwords"] == ["VIM2", "Qwen"]
+    assert context["draft_tokens"] == [1, 2, 151645]
+    assert recognizer.debug_context()["draft_tokens"] == []
+
+
 def test_draft_preview_final_and_hotwords_reset_use_same_model(tmp_path, monkeypatch):
     monkeypatch.setattr("vim2.draft.GpuDraftDecoder", FakeDraftDecoder)
     recognizer, loader, _ = _recognizer(tmp_path)

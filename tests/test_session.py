@@ -1,5 +1,8 @@
+import io
+import json
 from pathlib import Path
 import threading
+import zipfile
 
 import numpy as np
 import pytest
@@ -82,6 +85,9 @@ class FakeRecognizer:
     def __init__(self, responses: list[str | Exception]) -> None:
         self.responses = responses
         self.calls: list[tuple[AudioArtifact, ModelId]] = []
+
+    def debug_context(self) -> dict[str, object]:
+        return {"hotwords": ["VIM2"], "draft_tokens": [1, 2, 151645]}
 
     def transcribe(
         self,
@@ -453,6 +459,101 @@ def test_failed_recognition_retains_audio_and_retry_uses_original_model(
     ]
     assert artifact in recorder.discarded
     assert session.state is AppState.READY
+
+
+def test_export_failed_recording_preserves_exact_audio_and_failure_context(tmp_path):
+    import soundfile
+
+    from vim2.draft import GpuGenerationLimitError
+
+    samples = np.array([0.0, 0.12345678, -0.75, 1.125], dtype=np.float32)
+    artifact = AudioArtifact(samples, 16_000, ("input overflow",))
+    recorder = FakeRecorder(artifact)
+    paster = FakePaster()
+    session = VoiceSession(
+        _ready_machine(), recorder,
+        FakeRecognizer([GpuGenerationLimitError([3, 4]), "recovered"]), paster,
+    )
+    session.start(target_window=7, model_id=ModelId.FAST)
+    with pytest.raises(FinalRecognitionError):
+        session.stop()
+    assert list(tmp_path.iterdir()) == []
+
+    destination = tmp_path / "failure.zip"
+    session.export_failed_recording(destination)
+
+    with zipfile.ZipFile(destination) as archive:
+        assert set(archive.namelist()) == {"audio.wav", "metadata.json"}
+        wav = io.BytesIO(archive.read("audio.wav"))
+        assert soundfile.info(wav).subtype == "FLOAT"
+        wav.seek(0)
+        restored, rate = soundfile.read(wav, dtype="float32")
+        np.testing.assert_array_equal(restored, samples)
+        assert rate == 16_000
+        details = json.loads(archive.read("metadata.json"))
+    assert details["schema_version"] == 1
+    assert details["model_id"] == ModelId.FAST.value
+    assert details["audio"]["frames"] == 4
+    assert details["audio"]["warnings"] == ["input overflow"]
+    assert details["recognizer"]["hotwords"] == ["VIM2"]
+    assert details["recognizer"]["draft_tokens"] == [1, 2, 151645]
+    assert details["error"]["type"] == "GpuGenerationLimitError"
+    assert details["error"]["generated_tokens"] == [3, 4]
+    assert "generation limit" in details["error"]["message"]
+    assert "GpuGenerationLimitError" in details["error"]["traceback"]
+    assert details["failed_at"]
+    assert details["environment"]["python"]
+    assert session.state is AppState.RETRY_PENDING
+    assert recorder.discarded == []
+    assert paster.calls == []
+    assert session.retry() == "recovered"
+    assert destination.is_file()
+    with pytest.raises(RuntimeError, match="failed recording"):
+        session.export_failed_recording(tmp_path / "not-failed.zip")
+
+
+def test_export_write_failure_preserves_existing_file_and_pending_audio(
+    tmp_path, monkeypatch,
+):
+    import soundfile
+
+    artifact = _artifact(tmp_path)
+    session = VoiceSession(
+        _ready_machine(), FakeRecorder(artifact),
+        FakeRecognizer([RuntimeError("decode failed"), "recovered"]), FakePaster(),
+    )
+    session.start(target_window=7, model_id=ModelId.FAST)
+    with pytest.raises(FinalRecognitionError):
+        session.stop()
+    destination = tmp_path / "failure.zip"
+    destination.write_bytes(b"existing export")
+
+    def fail_write(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(soundfile, "write", fail_write)
+    with pytest.raises(OSError, match="disk full"):
+        session.export_failed_recording(destination)
+
+    assert destination.read_bytes() == b"existing export"
+    assert list(tmp_path.iterdir()) == [destination]
+    assert session.state is AppState.RETRY_PENDING
+    assert session.retry() == "recovered"
+
+
+def test_discarded_failure_cannot_be_exported(tmp_path):
+    session = VoiceSession(
+        _ready_machine(), FakeRecorder(_artifact(tmp_path)),
+        FakeRecognizer([RuntimeError("failed")]), FakePaster(),
+    )
+    session.start(target_window=7, model_id=ModelId.FAST)
+    with pytest.raises(FinalRecognitionError):
+        session.stop()
+    session.cancel()
+
+    with pytest.raises(RuntimeError, match="failed recording"):
+        session.export_failed_recording(tmp_path / "discarded.zip")
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_cancel_during_recording_never_recognizes_or_pastes(

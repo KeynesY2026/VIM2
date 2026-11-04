@@ -83,6 +83,13 @@ class QwenRecognizer:
         with self._lock:
             self._draft_tokens = ()
 
+    def debug_context(self) -> dict[str, object]:
+        with self._lock:
+            return {
+                "hotwords": list(self._hotwords.entries),
+                "draft_tokens": list(self._draft_tokens),
+            }
+
     def transcribe_preview(
         self, audio: AudioArtifact, model_id: ModelId,
         *, cancel_event: threading.Event | None = None,

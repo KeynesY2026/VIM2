@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import logging
+from pathlib import Path
 import threading
 from typing import Callable, Protocol
 
@@ -10,6 +12,9 @@ from vim2.models import MODEL_SPECS, ModelId
 from vim2.recognizer import TranscriptionCancelled
 from vim2.session import FinalRecognitionError, VoiceSession
 from vim2.state import AppState, StateMachine
+
+
+logger = logging.getLogger(__name__)
 
 
 class SettingsWriter(Protocol):
@@ -286,6 +291,20 @@ class AppController:
             self._on_finalized,
             self._on_final_error,
         )
+
+    def export_failed_recording(self, destination: Path) -> bool:
+        if self.state is not AppState.RETRY_PENDING or self._operation_busy:
+            self._view.show_error("当前没有可导出的失败录音。")
+            return False
+        try:
+            self._session.export_failed_recording(destination)
+        except (OSError, RuntimeError, ValueError, MemoryError) as exc:
+            logger.exception("Failed to export recognition failure case")
+            self._view.show_error(f"调试案例导出失败：{exc}")
+            return False
+        logger.info("Recognition failure case exported to %s", destination)
+        self._view.show_info(f"调试案例已保存：{destination}")
+        return True
 
     def reload_hotwords(self) -> None:
         if self.state is not AppState.READY or self._operation_busy:

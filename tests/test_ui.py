@@ -3,10 +3,11 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QRect, Qt
+from PySide6.QtCore import QRect, Qt, QTimer
 from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+import pytest
 
 import vim2.ui as ui_module
 from vim2.models import ModelId
@@ -23,6 +24,105 @@ from vim2.ui import (
 
 def _app() -> QApplication:
     return QApplication.instance() or QApplication([])
+
+
+@pytest.mark.parametrize("save", [True, False])
+def test_failure_dialog_export_keeps_recording_until_user_discards(
+    tmp_path, monkeypatch, save,
+) -> None:
+    from test_controller import _controller
+
+    _app()
+    controller, _, recorder, _, notifications, _ = _controller(
+        tmp_path, [RuntimeError("decode failed")]
+    )
+    controller.start()
+    controller.toggle_recording()
+    controller.toggle_recording()
+    view = DesktopView()
+    view.bind(controller, lambda: None)
+    choices = iter(["导出调试案例", "放弃"])
+    destination = tmp_path / "failure.zip"
+
+    def exec_dialog(dialog):
+        assert controller.state is AppState.RETRY_PENDING
+        assert recorder.discarded == []
+        choice = next(choices)
+        button = next((b for b in dialog.buttons() if b.text() == choice), None)
+        assert button is not None, f"Missing failure action: {choice}"
+        button.click()
+        return 0
+
+    monkeypatch.setattr(ui_module.QMessageBox, "exec", exec_dialog)
+    monkeypatch.setattr(
+        ui_module.QFileDialog, "getSaveFileName",
+        lambda *args, **kwargs: (str(destination) if save else "", "ZIP (*.zip)"),
+    )
+    try:
+        view.show_retry_error("decode failed")
+        assert destination.exists() is save
+        assert controller.state is AppState.READY
+        assert len(recorder.discarded) == 1
+        assert not notifications.errors
+    finally:
+        view.overlay.close()
+
+
+def test_failure_dialog_can_export_then_retry_with_real_qt_events(
+    tmp_path, monkeypatch,
+) -> None:
+    from test_controller import _controller
+
+    app = _app()
+    controller, _, _, paster, _, _ = _controller(
+        tmp_path, [RuntimeError("decode failed"), "recovered"]
+    )
+    controller.start()
+    controller.toggle_recording()
+    controller.toggle_recording()
+    view = DesktopView()
+    view.bind(controller, lambda: None)
+    destination = tmp_path / "failure.zip"
+    monkeypatch.setattr(
+        ui_module.QFileDialog, "getSaveFileName",
+        lambda *args, **kwargs: (str(destination), "ZIP (*.zip)"),
+    )
+    clicked = []
+
+    def choose(text):
+        dialog = app.activeModalWidget()
+        if isinstance(dialog, ui_module.QMessageBox):
+            button = next((b for b in dialog.buttons() if b.text() == text), None)
+            if button is not None:
+                clicked.append(text)
+                button.click()
+                return
+            dialog.reject()
+
+    def export():
+        choose("导出调试案例")
+        QTimer.singleShot(0, lambda: choose("重试"))
+
+    def timeout():
+        clicked.append("timeout")
+        dialog = app.activeModalWidget()
+        if dialog is not None:
+            dialog.close()
+
+    watchdog = QTimer()
+    watchdog.setSingleShot(True)
+    watchdog.timeout.connect(timeout)
+    watchdog.start(3_000)
+    QTimer.singleShot(0, export)
+    try:
+        view.show_retry_error("decode failed")
+        assert clicked == ["导出调试案例", "重试"]
+        assert destination.is_file()
+        assert controller.state is AppState.READY
+        assert paster.calls == [("recovered", 321)]
+    finally:
+        watchdog.stop()
+        view.overlay.close()
 
 
 def test_microphone_menu_shows_actual_input_and_allows_session_selection(

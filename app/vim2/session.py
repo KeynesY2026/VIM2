@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import logging
 import threading
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
 from time import monotonic
 from typing import Protocol
 
 from vim2.audio import AudioArtifact
+from vim2.diagnostics import write_failure_case
+from vim2.draft import GpuGenerationLimitError
 from vim2.models import ModelId
 from vim2.postprocessing import (
     TextPostProcessor,
@@ -47,6 +52,8 @@ class Recorder(Protocol):
 
 
 class Recognizer(Protocol):
+    def debug_context(self) -> dict[str, object]: ...
+
     @property
     def supports_live_draft(self) -> bool: ...
 
@@ -95,6 +102,7 @@ class VoiceSession:
         self._target_window: int | None = None
         self._model_id: ModelId | None = None
         self._pending_audio: AudioArtifact | None = None
+        self._failure_details: dict[str, object] | None = None
         self._warnings: tuple[str, ...] = ()
         self._shutting_down = False
         self._stable_prefix = StablePrefixTracker()
@@ -131,6 +139,7 @@ class VoiceSession:
             raise RuntimeError(f"Cannot start recording while {self.state.value}")
         policy = DraftPreviewPolicy() if self.uses_live_draft else None
         self._recorder.start()
+        self._failure_details = None
         self._reset_live_draft()
         self._draft_preview_policy = policy
         self._stable_prefix.reset()
@@ -185,6 +194,15 @@ class VoiceSession:
         self._machine.transition_to(AppState.FINALIZING)
         self._reset_live_draft()
         return self._recognize_pending(allow_tail=False)
+
+    def export_failed_recording(self, destination: Path) -> None:
+        if (
+            self.state is not AppState.RETRY_PENDING
+            or self._pending_audio is None
+            or self._failure_details is None
+        ):
+            raise RuntimeError("There is no failed recording to export")
+        write_failure_case(destination, self._pending_audio, self._failure_details)
 
     def preview(
         self, *, cancel_event: threading.Event | None = None
@@ -297,6 +315,7 @@ class VoiceSession:
             or self._target_window is None
         ):
             raise RuntimeError("Recognition session data is incomplete")
+        context = self._recognizer.debug_context()
         try:
             text = self._recognize_final(
                 self._pending_audio,
@@ -304,6 +323,22 @@ class VoiceSession:
                 allow_tail=allow_tail,
             )
         except RECOGNITION_ERRORS as exc:
+            error_details: dict[str, object] = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "traceback": "".join(traceback.format_exception(
+                    type(exc), exc, exc.__traceback__
+                )),
+            }
+            if isinstance(exc, GpuGenerationLimitError):
+                error_details["generated_tokens"] = list(exc.tokens)
+            self._failure_details = {
+                "schema_version": 1,
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+                "model_id": self._model_id.value,
+                "recognizer": context,
+                "error": error_details,
+            }
             self._machine.transition_to(AppState.RETRY_PENDING)
             raise FinalRecognitionError(str(exc)) from exc
 
@@ -363,6 +398,7 @@ class VoiceSession:
         finally:
             self._recorder.discard(artifact)
             self._pending_audio = None
+            self._failure_details = None
             self._capture_sealed = False
             self._reset_live_draft()
             self._machine.transition_to(AppState.READY)
@@ -377,10 +413,12 @@ class VoiceSession:
             self._pending_audio = None
         else:
             raise RuntimeError("There is no recording or failed audio to cancel")
+        self._failure_details = None
         self._machine.transition_to(AppState.READY)
 
     def shutdown(self) -> None:
         self._shutting_down = True
+        self._failure_details = None
         if self.state in {AppState.RECORDING, AppState.LIVE_TRANSCRIBING}:
             self._recorder.cancel()
             self._capture_sealed = False
