@@ -4,6 +4,7 @@ import ctypes
 import logging
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -439,6 +440,7 @@ class DesktopView:
         self.tray.setToolTip(STATUS_TOOLTIPS[AppState.STARTING])
 
         self._controller = None
+        self._restore_focus: Callable[[], None] | None = None
         self._target_window: int | None = None
         self._latest_preview = ""
         self._preview_timer = QTimer()
@@ -452,8 +454,16 @@ class DesktopView:
         self._error_hide_timer.setInterval(10_000)
         self._error_hide_timer.timeout.connect(self.overlay.fade_out)
 
-    def bind(self, controller, quit_callback) -> None:
+    def bind(
+        self,
+        controller,
+        quit_callback,
+        *,
+        restore_focus: Callable[[], None] | None = None,
+    ) -> None:
         self._controller = controller
+        self._restore_focus = restore_focus
+        self.tray.activated.connect(self._on_tray_activated)
         self.cpu_model_action.triggered.connect(
             lambda: controller.switch_model(ModelId.CPU)
         )
@@ -471,6 +481,14 @@ class DesktopView:
         )
         self.about_action.triggered.connect(self._show_about)
         self.exit_action.triggered.connect(quit_callback)
+
+    def _on_tray_activated(
+        self, reason: QSystemTrayIcon.ActivationReason
+    ) -> None:
+        if reason is QSystemTrayIcon.ActivationReason.Trigger:
+            if self._restore_focus is not None:
+                self._restore_focus()
+            self._controller.toggle_recording()
 
     def show(self) -> None:
         self.tray.show()

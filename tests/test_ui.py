@@ -468,15 +468,32 @@ def test_tray_menu_reflects_state_and_selected_model() -> None:
     assert not view.fast_model_action.isEnabled()
 
 
-def test_clicking_tray_icon_does_not_toggle_recording() -> None:
+@pytest.mark.parametrize(
+    ("reasons", "expected_calls"),
+    [
+        ((QSystemTrayIcon.ActivationReason.Trigger,), ["restore", "toggle"]),
+        ((QSystemTrayIcon.ActivationReason.DoubleClick,), []),
+        ((QSystemTrayIcon.ActivationReason.Context,), []),
+        (
+            (
+                QSystemTrayIcon.ActivationReason.Trigger,
+                QSystemTrayIcon.ActivationReason.DoubleClick,
+            ),
+            ["restore", "toggle"],
+        ),
+    ],
+)
+def test_tray_activation_restores_focus_before_toggling_only_on_click(
+    reasons, expected_calls
+) -> None:
     _app()
     view = DesktopView()
 
-    class Controller:
-        recording_toggles = 0
+    calls: list[str] = []
 
+    class Controller:
         def toggle_recording(self) -> None:
-            self.recording_toggles += 1
+            calls.append("toggle")
 
         def switch_model(self, model_id: ModelId) -> None:
             del model_id
@@ -488,11 +505,15 @@ def test_clicking_tray_icon_does_not_toggle_recording() -> None:
             pass
 
     controller = Controller()
-    view.bind(controller, lambda: None)
+    view.bind(
+        controller,
+        lambda: None,
+        restore_focus=lambda: calls.append("restore"),
+    )
+    for reason in reasons:
+        view.tray.activated.emit(reason)
 
-    view.tray.activated.emit(QSystemTrayIcon.ActivationReason.Trigger)
-
-    assert controller.recording_toggles == 0
+    assert calls == expected_calls
 
 
 def test_tray_menu_supports_cpu_model() -> None:

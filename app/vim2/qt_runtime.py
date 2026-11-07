@@ -22,9 +22,10 @@ from PySide6.QtMultimedia import QMediaDevices
 
 from vim2.application import SingleInstanceGuard
 from vim2.audio import AudioRecorder
-from vim2.clipboard import WindowsClipboardPaster
+from vim2.clipboard import NativeWindowsApi, WindowsClipboardPaster
 from vim2.config import Settings, SettingsRepository
 from vim2.controller import AppController
+from vim2.foreground import ForegroundWindowTracker
 from vim2.hotkey import (
     HotkeyDispatcher,
     WindowsHotkeyListener,
@@ -166,12 +167,6 @@ def _enable_per_monitor_dpi() -> None:
     user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
 
 
-def _foreground_window() -> int:
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    user32.GetForegroundWindow.restype = ctypes.c_void_p
-    return int(user32.GetForegroundWindow() or 0)
-
-
 def _restart_process(paths: AppPaths) -> None:
     os.execv(
         sys.executable,
@@ -219,6 +214,8 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
     recorder = AudioRecorder(
         default_input_id=lambda: bytes(media_devices.defaultAudioInput().id())
     )
+    windows_api = NativeWindowsApi()
+    foreground = ForegroundWindowTracker(windows_api.set_foreground_window)
     bridge = _HotkeyBridge()
     dispatcher = HotkeyDispatcher(
         parse_hotkey(settings.hotkey),
@@ -233,7 +230,8 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
     )
     hotkey = WindowsHotkeyListener(dispatcher)
     paster = WindowsClipboardPaster(
-        wait_until_hotkey_released=hotkey.wait_until_released
+        windows_api,
+        wait_until_hotkey_released=hotkey.wait_until_released,
     )
     session = VoiceSession(
         machine,
@@ -257,19 +255,24 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
         session=session,
         view=view,
         task_runner=runner,
-        foreground_window=_foreground_window,
+        foreground_window=foreground,
         restart_application=lambda: app.exit(RESTART_EXIT_CODE),
         open_hotwords_file=hotword_editor.open,
     )
     hotword_editor.changed.connect(controller.hotwords_file_changed)
     bridge.toggle_requested.connect(controller.toggle_recording)
     bridge.cancel_requested.connect(controller.cancel)
-    view.bind(controller, app.quit)
+    view.bind(
+        controller,
+        app.quit,
+        restore_focus=foreground.restore_last_active,
+    )
     view.bind_microphones(recorder)
 
     try:
         hotkey.start()
     except (OSError, RuntimeError) as exc:
+        foreground.close()
         QMessageBox.critical(
             None, "VIM2", f"无法注册全局热键 {settings.hotkey}：{exc}"
         )
@@ -287,6 +290,7 @@ def run_qt_application(paths: AppPaths, settings: Settings) -> int:
         hotkey.stop()
         runner.wait_for_done()
         view.tray.hide()
+        foreground.close()
         guard.close()
 
     app.aboutToQuit.connect(cleanup)
