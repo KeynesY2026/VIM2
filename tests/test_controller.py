@@ -1,4 +1,5 @@
 from pathlib import Path
+import logging
 import threading
 
 import numpy as np
@@ -245,6 +246,68 @@ def test_export_failed_recording_reports_io_error_without_discarding_audio(tmp_p
     assert recorder.discarded == []
     controller.retry()
     assert controller.state is AppState.READY
+
+
+def test_export_error_is_retained_and_cleared_after_success(tmp_path, caplog):
+    controller, _, recorder, _, _, _ = _controller(
+        tmp_path, [RuntimeError("decode failed")]
+    )
+    controller.start()
+    controller.toggle_recording()
+    controller.toggle_recording()
+    destination = tmp_path / "missing" / "case.zip"
+    with caplog.at_level(logging.INFO, logger="vim2.controller"):
+        assert not controller.export_failed_recording(destination)
+    assert str(destination) in controller.last_export_error
+    assert "FileNotFoundError" in controller.last_export_error
+    assert str(destination) in caplog.text
+    assert recorder.discarded == []
+    assert controller.export_failed_recording(tmp_path / "case.zip")
+    assert controller.last_export_error is None
+
+
+def test_rejected_export_logs_state_and_destination(tmp_path, caplog):
+    controller, _, _, _, _, _ = _controller(tmp_path, [])
+    controller.start()
+    destination = tmp_path / "case.zip"
+    with caplog.at_level(logging.INFO, logger="vim2.controller"):
+        assert not controller.export_failed_recording(destination)
+    assert controller.last_export_error
+    assert str(destination) in caplog.text
+    assert "ready" in caplog.text.lower()
+
+
+def test_controller_exports_wav_without_discarding_failed_audio(tmp_path):
+    import soundfile
+
+    controller, _, recorder, _, _, _ = _controller(
+        tmp_path, [RuntimeError("decode failed"), "recovered"]
+    )
+    controller.start()
+    controller.toggle_recording()
+    controller.toggle_recording()
+    destination = tmp_path / "recording.wav"
+    assert controller.export_failed_recording(destination, audio_only=True)
+    assert soundfile.info(destination).frames == 16000
+    assert recorder.discarded == []
+    controller.retry()
+    assert controller.state is AppState.READY
+
+
+def test_metadata_export_error_is_reported_and_wav_remains_available(tmp_path):
+    controller, recognizer, recorder, _, view, _ = _controller(
+        tmp_path, [RuntimeError("decode failed")]
+    )
+    recognizer.debug_context = lambda: {"invalid_metadata": object()}
+    controller.start()
+    controller.toggle_recording()
+    controller.toggle_recording()
+    assert not controller.export_failed_recording(tmp_path / "case.zip")
+    assert "TypeError" in controller.last_export_error
+    assert view.errors
+    assert recorder.discarded == []
+    assert controller.export_failed_recording(tmp_path / "audio.wav", audio_only=True)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["audio.wav"]
 
 
 def test_cross_backend_model_switch_restarts_without_loading_both_runtimes(

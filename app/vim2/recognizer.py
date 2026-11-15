@@ -23,6 +23,10 @@ from vim2.paths import AppPaths
 logger = logging.getLogger(__name__)
 
 
+class _GpuHotwordEchoError(RuntimeError):
+    pass
+
+
 class ModelSwitchError(RuntimeError):
     pass
 
@@ -102,7 +106,20 @@ class QwenRecognizer:
             return text
 
     def transcribe_final(self, audio: AudioArtifact, model_id: ModelId) -> str:
+        from vim2.draft import GpuGenerationLimitError
+
         with self._lock:
+            try:
+                text, _ = self._transcribe_draft(audio, model_id)
+                return text
+            except GpuGenerationLimitError:
+                if not self._draft_tokens:
+                    raise
+                logger.warning(
+                    "Final GPU decoding reached generation limit; retrying once "
+                    "without draft"
+                )
+                self.reset_live_draft()
             text, _ = self._transcribe_draft(audio, model_id)
             return text
 
@@ -116,16 +133,25 @@ class QwenRecognizer:
 
         generation_model = self._model.model
         original_generate = generation_model.generate
-        decoder = GpuDraftDecoder(
-            generation_model, self._torch, self._draft_tokens,
-            cancel_event=cancel_event, cancellation_error=TranscriptionCancelled,
-        )
-        generation_model.generate = decoder.generate
+        decoder: GpuDraftDecoder | None = None
+
+        def generate(*args, **kwargs):
+            nonlocal decoder
+            # Recovery starts a fresh decoder, never the contaminated draft/KV.
+            decoder = GpuDraftDecoder(
+                generation_model, self._torch, self._draft_tokens,
+                cancel_event=cancel_event, cancellation_error=TranscriptionCancelled,
+            )
+            return decoder.generate(*args, **kwargs)
+
+        generation_model.generate = generate
         try:
             # The decoder checks cancellation on each verification batch.
             text = self.transcribe(audio, model_id)
             if cancel_event is not None and cancel_event.is_set():
                 raise TranscriptionCancelled()
+            if decoder is None:
+                raise RuntimeError("Qwen3-ASR did not invoke the GPU decoder")
             logger.info(
                 "Draft decoding: tokens=%d verified=%d forwards=%d",
                 len(decoder.tokens), decoder.verified_tokens, decoder.forward_calls,
@@ -396,24 +422,45 @@ class QwenRecognizer:
                     model_id, duration_seconds, audio_config._attn_implementation,
                     audio_tower.conv_chunksize,
                 )
-                results = self._model.transcribe(
-                    audio=model_audio,
-                    language=None,
-                    context=self._hotwords.gpu_context,
-                )
+                from vim2.draft import GpuGenerationLimitError
+
+                context = self._hotwords.gpu_context
+                for attempt in range(2):
+                    try:
+                        results = self._model.transcribe(
+                            audio=model_audio,
+                            language=None,
+                            context=context,
+                        )
+                        if cancel_event is not None and cancel_event.is_set():
+                            raise TranscriptionCancelled()
+                        if not results:
+                            raise RuntimeError("Qwen3-ASR returned no recognition result")
+                        text = results[0].text
+                        if not isinstance(text, str):
+                            raise RuntimeError("Qwen3-ASR returned an invalid text result")
+                        if context and self._hotwords.echoes_gpu_context(text):
+                            raise _GpuHotwordEchoError(
+                                "GPU decoding copied the complete hotword list"
+                            )
+                        break
+                    except (GpuGenerationLimitError, _GpuHotwordEchoError) as error:
+                        if not context or attempt:
+                            raise
+                        if cancel_event is not None and cancel_event.is_set():
+                            raise TranscriptionCancelled() from error
+                        logger.warning(
+                            "GPU decoding rejected; retrying once without hotword "
+                            "context or draft: %s", error,
+                        )
+                        self.reset_live_draft()
+                        context = ""
             finally:
                 audio_config._attn_implementation = original_audio_attention
                 audio_tower.conv_chunksize = original_convolution_batch
                 text_config._attn_implementation = original_text_attention
                 if original_generate is not None:
                     generation_model.generate = original_generate
-            if cancel_event is not None and cancel_event.is_set():
-                raise TranscriptionCancelled()
-            if not results:
-                raise RuntimeError("Qwen3-ASR returned no recognition result")
-            text = results[0].text
-            if not isinstance(text, str):
-                raise RuntimeError("Qwen3-ASR returned an invalid text result")
             logger.info("Transcription completed with model %s", model_id)
             return text
 

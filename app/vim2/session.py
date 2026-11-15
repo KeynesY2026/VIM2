@@ -9,7 +9,7 @@ from time import monotonic
 from typing import Protocol
 
 from vim2.audio import AudioArtifact
-from vim2.diagnostics import write_failure_case
+from vim2.diagnostics import write_failure_audio, write_failure_case
 from vim2.draft import GpuGenerationLimitError
 from vim2.models import ModelId
 from vim2.postprocessing import (
@@ -195,14 +195,19 @@ class VoiceSession:
         self._reset_live_draft()
         return self._recognize_pending(allow_tail=False)
 
-    def export_failed_recording(self, destination: Path) -> None:
+    def export_failed_recording(
+        self, destination: Path, *, audio_only: bool = False,
+    ) -> None:
         if (
             self.state is not AppState.RETRY_PENDING
             or self._pending_audio is None
             or self._failure_details is None
         ):
             raise RuntimeError("There is no failed recording to export")
-        write_failure_case(destination, self._pending_audio, self._failure_details)
+        if audio_only:
+            write_failure_audio(destination, self._pending_audio)
+        else:
+            write_failure_case(destination, self._pending_audio, self._failure_details)
 
     def preview(
         self, *, cancel_event: threading.Event | None = None

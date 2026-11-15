@@ -8,6 +8,8 @@ import sys
 import tempfile
 import threading
 import zipfile
+from collections.abc import Generator
+from contextlib import contextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import ModuleType
@@ -20,6 +22,31 @@ if TYPE_CHECKING:
 
 
 _fault_stream: TextIO | None = None
+
+
+@contextmanager
+def _atomic_export(destination: Path) -> Generator[Path, None, None]:
+    with tempfile.NamedTemporaryFile(
+        dir=destination.parent, prefix=".vim2-failure-", suffix=".tmp",
+        delete=False,
+    ) as stream:
+        temporary = Path(stream.name)
+    try:
+        yield temporary
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def write_failure_audio(destination: Path, audio: AudioArtifact) -> None:
+    import soundfile
+
+    with _atomic_export(destination) as temporary:
+        with temporary.open("wb") as stream:
+            soundfile.write(
+                stream, audio.samples, audio.sample_rate,
+                format="WAV", subtype="FLOAT",
+            )
 
 
 def write_failure_case(
@@ -49,12 +76,7 @@ def write_failure_case(
             },
         },
     }
-    with tempfile.NamedTemporaryFile(
-        dir=destination.parent, prefix=".vim2-failure-", suffix=".tmp",
-        delete=False,
-    ) as stream:
-        temporary = Path(stream.name)
-    try:
+    with _atomic_export(destination) as temporary:
         with io.BytesIO() as wav:
             # Float WAV preserves the original samples without PCM quantization.
             soundfile.write(
@@ -66,9 +88,6 @@ def write_failure_case(
                     "metadata.json",
                     json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
                 )
-        temporary.replace(destination)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def configure_runtime_logging(

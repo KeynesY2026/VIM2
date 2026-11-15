@@ -656,6 +656,7 @@ class DesktopView:
         dialog = QMessageBox()
         dialog.setIcon(QMessageBox.Icon.Critical)
         dialog.setWindowTitle("VIM2 识别失败")
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
         dialog.setText(f"识别失败：{message}")
         retry_button = dialog.addButton(
             "重试", QMessageBox.ButtonRole.AcceptRole
@@ -663,29 +664,61 @@ class DesktopView:
         export_button = dialog.addButton(
             "导出调试案例", QMessageBox.ButtonRole.ActionRole
         )
+        audio_button = dialog.addButton(
+            "仅保存录音 WAV", QMessageBox.ButtonRole.ActionRole
+        )
         dialog.addButton("放弃", QMessageBox.ButtonRole.RejectRole)
         dialog.setInformativeText(
-            "可手动导出原始录音、热词及识别上下文，仅保存到本机。\n"
+            "可导出调试案例，或仅保存原始录音 WAV，均只保存到本机。\n"
+            "重试会清空草稿并使用完整录音重新识别。\n"
             "放弃或退出后无法导出；分享调试案例前请确认其中的隐私内容。"
         )
         while True:
             dialog.exec()
             clicked = dialog.clickedButton()
-            if clicked is export_button:
-                filename, _ = QFileDialog.getSaveFileName(
-                    dialog, "导出失败识别调试案例",
-                    f"vim2-failure-{datetime.now():%Y%m%d-%H%M%S}.zip",
-                    "ZIP (*.zip)",
+            if clicked in (export_button, audio_button):
+                audio_only = clicked is audio_button
+                extension = "wav" if audio_only else "zip"
+                logging.getLogger(__name__).info(
+                    "Opening failure recording save dialog: format=%s", extension,
                 )
+                try:
+                    filename, _ = QFileDialog.getSaveFileName(
+                        dialog, "保存原始录音" if audio_only else "导出失败识别调试案例",
+                        f"vim2-failure-{datetime.now():%Y%m%d-%H%M%S}.{extension}",
+                        "WAV (*.wav)" if audio_only else "ZIP (*.zip)",
+                    )
+                except (OSError, RuntimeError) as exc:
+                    logging.getLogger(__name__).exception(
+                        "Failure recording save dialog failed: format=%s", extension,
+                    )
+                    error = f"{type(exc).__name__}: {exc}"
+                    dialog.setDetailedText(error)
+                    dialog.setInformativeText(
+                        f"无法选择保存位置，录音仍保留。\n{error}\n"
+                        "可重新选择保存位置，或重试识别。"
+                    )
+                    continue
                 if filename:
-                    if self._controller.export_failed_recording(Path(filename)):
+                    if self._controller.export_failed_recording(
+                        Path(filename), audio_only=audio_only,
+                    ):
+                        label = "原始录音" if audio_only else "调试案例"
+                        dialog.setDetailedText("")
                         dialog.setInformativeText(
-                            f"调试案例已保存：{filename}\n仍可重试或放弃。"
+                            f"{label}已保存：{filename}\n仍可重试或放弃。"
                         )
                     else:
+                        error = self._controller.last_export_error
+                        dialog.setDetailedText(error or "")
                         dialog.setInformativeText(
-                            "导出失败，录音仍保留。请检查保存位置和磁盘空间后重试导出。"
+                            f"导出失败，录音仍保留。\n{error}\n"
+                            "可换位置重试，或选择“仅保存录音 WAV”。"
                         )
+                else:
+                    logging.getLogger(__name__).info(
+                        "Failure recording save dialog cancelled: format=%s", extension,
+                    )
                 continue
             if clicked is retry_button:
                 self._controller.retry()

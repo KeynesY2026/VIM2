@@ -541,6 +541,58 @@ def test_export_write_failure_preserves_existing_file_and_pending_audio(
     assert session.retry() == "recovered"
 
 
+def test_wav_export_survives_metadata_serialization_failure(tmp_path):
+    import soundfile
+
+    artifact = AudioArtifact(
+        np.array([0.12345678, -0.75, 1.125], dtype=np.float32), 16000
+    )
+    recognizer = FakeRecognizer([RuntimeError("failed"), "recovered"])
+    recognizer.debug_context = lambda: {"unserializable": object()}
+    recorder = FakeRecorder(artifact)
+    session = VoiceSession(_ready_machine(), recorder, recognizer, FakePaster())
+    session.start(target_window=7, model_id=ModelId.FAST)
+    with pytest.raises(FinalRecognitionError):
+        session.stop()
+    with pytest.raises(TypeError):
+        session.export_failed_recording(tmp_path / "failure.zip")
+    destination = tmp_path / "audio.wav"
+    session.export_failed_recording(destination, audio_only=True)
+    restored, rate = soundfile.read(destination, dtype="float32")
+    np.testing.assert_array_equal(restored, artifact.samples)
+    assert rate == 16000
+    assert soundfile.info(destination).subtype == "FLOAT"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["audio.wav"]
+    assert recorder.discarded == []
+    assert session.retry() == "recovered"
+
+
+def test_wav_write_failure_preserves_destination_and_retry(tmp_path, monkeypatch):
+    import soundfile
+
+    recorder = FakeRecorder(_artifact(tmp_path))
+    session = VoiceSession(
+        _ready_machine(), recorder,
+        FakeRecognizer([RuntimeError("failed"), "recovered"]), FakePaster(),
+    )
+    session.start(target_window=7, model_id=ModelId.FAST)
+    with pytest.raises(FinalRecognitionError):
+        session.stop()
+    destination = tmp_path / "audio.wav"
+    destination.write_bytes(b"existing")
+
+    def fail_write(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(soundfile, "write", fail_write)
+    with pytest.raises(OSError, match="disk full"):
+        session.export_failed_recording(destination, audio_only=True)
+    assert destination.read_bytes() == b"existing"
+    assert list(tmp_path.iterdir()) == [destination]
+    assert recorder.discarded == []
+    assert session.retry() == "recovered"
+
+
 def test_discarded_failure_cannot_be_exported(tmp_path):
     session = VoiceSession(
         _ready_machine(), FakeRecorder(_artifact(tmp_path)),

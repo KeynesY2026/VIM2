@@ -27,8 +27,9 @@ def _app() -> QApplication:
 
 
 @pytest.mark.parametrize("save", [True, False])
+@pytest.mark.parametrize("audio_only", [True, False])
 def test_failure_dialog_export_keeps_recording_until_user_discards(
-    tmp_path, monkeypatch, save,
+    tmp_path, monkeypatch, save, audio_only,
 ) -> None:
     from test_controller import _controller
 
@@ -41,8 +42,8 @@ def test_failure_dialog_export_keeps_recording_until_user_discards(
     controller.toggle_recording()
     view = DesktopView()
     view.bind(controller, lambda: None)
-    choices = iter(["导出调试案例", "放弃"])
-    destination = tmp_path / "failure.zip"
+    choices = iter(["仅保存录音 WAV" if audio_only else "导出调试案例", "放弃"])
+    destination = tmp_path / ("audio.wav" if audio_only else "failure.zip")
 
     def exec_dialog(dialog):
         assert controller.state is AppState.RETRY_PENDING
@@ -68,8 +69,9 @@ def test_failure_dialog_export_keeps_recording_until_user_discards(
         view.overlay.close()
 
 
+@pytest.mark.parametrize("audio_only", [True, False])
 def test_failure_dialog_can_export_then_retry_with_real_qt_events(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, audio_only,
 ) -> None:
     from test_controller import _controller
 
@@ -82,7 +84,8 @@ def test_failure_dialog_can_export_then_retry_with_real_qt_events(
     controller.toggle_recording()
     view = DesktopView()
     view.bind(controller, lambda: None)
-    destination = tmp_path / "failure.zip"
+    destination = tmp_path / ("audio.wav" if audio_only else "failure.zip")
+    export_choice = "仅保存录音 WAV" if audio_only else "导出调试案例"
     monkeypatch.setattr(
         ui_module.QFileDialog, "getSaveFileName",
         lambda *args, **kwargs: (str(destination), "ZIP (*.zip)"),
@@ -100,7 +103,7 @@ def test_failure_dialog_can_export_then_retry_with_real_qt_events(
             dialog.reject()
 
     def export():
-        choose("导出调试案例")
+        choose(export_choice)
         QTimer.singleShot(0, lambda: choose("重试"))
 
     def timeout():
@@ -116,12 +119,102 @@ def test_failure_dialog_can_export_then_retry_with_real_qt_events(
     QTimer.singleShot(0, export)
     try:
         view.show_retry_error("decode failed")
-        assert clicked == ["导出调试案例", "重试"]
+        assert clicked == [export_choice, "重试"]
         assert destination.is_file()
+        if audio_only:
+            import soundfile
+
+            assert soundfile.info(destination).frames == 16000
         assert controller.state is AppState.READY
         assert paster.calls == [("recovered", 321)]
     finally:
         watchdog.stop()
+        view.overlay.close()
+
+
+def test_failure_dialog_keeps_export_error_and_can_save_wav(tmp_path, monkeypatch):
+    import soundfile
+    from test_controller import _controller
+
+    _app()
+    controller, _, recorder, _, _, _ = _controller(
+        tmp_path, [RuntimeError("decode failed")]
+    )
+    controller.start()
+    controller.toggle_recording()
+    controller.toggle_recording()
+    view = DesktopView()
+    view.bind(controller, lambda: None)
+    choices = iter(["导出调试案例", "仅保存录音 WAV", "放弃"])
+    destinations = iter([
+        tmp_path / "missing" / "case.zip", tmp_path / "audio.wav"
+    ])
+    errors = []
+
+    def exec_dialog(dialog):
+        choice = next(choices)
+        if choice == "仅保存录音 WAV":
+            errors.append(dialog.informativeText())
+            assert "FileNotFoundError" in dialog.informativeText()
+            assert str(tmp_path / "missing" / "case.zip") in dialog.informativeText()
+            assert "FileNotFoundError" in dialog.detailedText()
+            assert recorder.discarded == []
+        if choice == "放弃":
+            assert not dialog.detailedText()
+            assert soundfile.info(tmp_path / "audio.wav").frames == 16000
+        button = next(b for b in dialog.buttons() if b.text() == choice)
+        button.click()
+        return 0
+
+    monkeypatch.setattr(ui_module.QMessageBox, "exec", exec_dialog)
+    monkeypatch.setattr(
+        ui_module.QFileDialog, "getSaveFileName",
+        lambda *args, **kwargs: (str(next(destinations)), ""),
+    )
+    try:
+        view.show_retry_error("decode failed")
+        assert len(errors) == 1
+        assert controller.state is AppState.READY
+    finally:
+        view.overlay.close()
+
+
+def test_save_dialog_error_is_logged_and_keeps_retry_dialog(tmp_path, monkeypatch, caplog):
+    from test_controller import _controller
+
+    _app()
+    controller, _, recorder, _, _, _ = _controller(
+        tmp_path, [RuntimeError("decode failed")]
+    )
+    controller.start()
+    controller.toggle_recording()
+    controller.toggle_recording()
+    view = DesktopView()
+    view.bind(controller, lambda: None)
+    choices = iter(["导出调试案例", "放弃"])
+    inspected = []
+
+    def exec_dialog(dialog):
+        choice = next(choices)
+        if choice == "放弃":
+            inspected.append(dialog.informativeText())
+            assert "chooser unavailable" in dialog.informativeText()
+            assert "chooser unavailable" in dialog.detailedText()
+            assert controller.state is AppState.RETRY_PENDING
+            assert recorder.discarded == []
+        next(b for b in dialog.buttons() if b.text() == choice).click()
+        return 0
+
+    def fail_chooser(*args, **kwargs):
+        raise RuntimeError("chooser unavailable")
+
+    monkeypatch.setattr(ui_module.QMessageBox, "exec", exec_dialog)
+    monkeypatch.setattr(ui_module.QFileDialog, "getSaveFileName", fail_chooser)
+    try:
+        view.show_retry_error("decode failed")
+        assert inspected
+        assert "chooser unavailable" in caplog.text
+    finally:
         view.overlay.close()
 
 

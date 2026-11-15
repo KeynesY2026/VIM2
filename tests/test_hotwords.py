@@ -11,7 +11,9 @@ def test_parse_hotwords_normalizes_deduplicates_and_serializes() -> None:
     )
 
     assert snapshot.entries == ("VIM2", "Qwen3-ASR")
-    assert snapshot.gpu_context == "VIM2\nQwen3-ASR"
+    assert "spelling references" in snapshot.gpu_context
+    assert "Use a term only if it is spoken" in snapshot.gpu_context
+    assert snapshot.gpu_context.endswith("VIM2, Qwen3-ASR")
     assert snapshot.cpu_hotwords == "VIM2,Qwen3-ASR"
 
 
@@ -39,4 +41,23 @@ def test_repository_creates_first_run_template_and_returns_empty_snapshot(
     snapshot = repository.load()
 
     assert snapshot.entries == ()
+    assert snapshot.gpu_context == ""
     assert path.read_text(encoding="utf-8").startswith("#")
+
+
+@pytest.mark.parametrize(
+    ("text", "echo"),
+    [
+        ("ADO, Kusto, PR, AI. ADO, Kusto, PR, AI.", True),
+        ("ado\uff0ckusto\uff0cpr\uff0cai\u3002Actual speech.", True),
+        ("Use ADO and Kusto to inspect the PR with AI.", False),
+        ("ADO and Kusto are useful.", False),
+    ],
+)
+def test_gpu_context_echo_requires_the_complete_ordered_word_list(text, echo):
+    snapshot = parse_hotwords("ADO\nKusto\nPR\nAI")
+    assert snapshot.echoes_gpu_context(text) is echo
+
+
+def test_short_hotword_list_is_not_mistaken_for_context_echo():
+    assert not parse_hotwords("ADO\nKusto").echoes_gpu_context("ADO, Kusto")

@@ -203,6 +203,180 @@ def test_debug_context_captures_successful_draft_and_hotwords(tmp_path, monkeypa
     assert recognizer.debug_context()["draft_tokens"] == []
 
 
+@pytest.mark.parametrize("fails_again", [False, True])
+def test_final_generation_limit_retries_once_without_draft(
+    tmp_path, monkeypatch, caplog, fails_again,
+):
+    from vim2.draft import GpuGenerationLimitError
+
+    drafts = []
+
+    class LimitedDecoder(FakeDraftDecoder):
+        def generate(self):
+            drafts.append(self.draft)
+            if self.draft or fails_again:
+                raise GpuGenerationLimitError([3] * 512)
+            return super().generate()
+
+    monkeypatch.setattr("vim2.draft.GpuDraftDecoder", FakeDraftDecoder)
+    recognizer, loader, _ = _recognizer(tmp_path)
+    recognizer.load(ModelId.FAST)
+    artifact = AudioArtifact(np.zeros(16000, dtype=np.float32), 16000)
+    recognizer.transcribe_preview(artifact, ModelId.FAST)
+    original_generate = loader.models[0].model.generate
+    monkeypatch.setattr("vim2.draft.GpuDraftDecoder", LimitedDecoder)
+    if fails_again:
+        with pytest.raises(GpuGenerationLimitError):
+            recognizer.transcribe_final(artifact, ModelId.FAST)
+    else:
+        assert recognizer.transcribe_final(artifact, ModelId.FAST) == "recognized"
+    assert drafts == [(1, 2, 151645), ()]
+    assert recognizer.debug_context()["draft_tokens"] == []
+    assert loader.models[0].model.generate == original_generate
+    assert "without draft" in caplog.text
+
+
+@pytest.mark.parametrize("operation", ["preview", "final"])
+def test_generation_limit_without_draft_is_not_retried(tmp_path, monkeypatch, operation):
+    from vim2.draft import GpuGenerationLimitError
+
+    class LimitedDecoder(FakeDraftDecoder):
+        def generate(self):
+            raise GpuGenerationLimitError([3] * 512)
+
+    monkeypatch.setattr("vim2.draft.GpuDraftDecoder", LimitedDecoder)
+    recognizer, loader, _ = _recognizer(tmp_path)
+    recognizer.load(ModelId.FAST)
+    artifact = AudioArtifact(np.zeros(16000, dtype=np.float32), 16000)
+    transcribe = (
+        recognizer.transcribe_preview if operation == "preview"
+        else recognizer.transcribe_final
+    )
+    with pytest.raises(GpuGenerationLimitError):
+        transcribe(artifact, ModelId.FAST)
+    assert len(loader.models[0].calls) == 1
+
+
+@pytest.mark.parametrize("operation", ["preview", "final", "transcribe"])
+def test_hotword_echo_is_verified_without_context_before_acceptance(
+    tmp_path, monkeypatch, caplog, operation,
+):
+    monkeypatch.setattr("vim2.draft.GpuDraftDecoder", FakeDraftDecoder)
+    recognizer, loader, _ = _recognizer(tmp_path)
+    recognizer.load(ModelId.FAST)
+    recognizer._paths.hotwords_file.write_text("ADO\nKusto\nPR\nAI", encoding="utf-8")
+    recognizer.reload_hotwords()
+    model = loader.models[0]
+    native_transcribe = model.transcribe
+
+    def echo_with_context(**kwargs):
+        model.text = "ADO, Kusto, PR, AI. Actual speech." if kwargs["context"] else "Actual speech."
+        return native_transcribe(**kwargs)
+
+    model.transcribe = echo_with_context
+    recognizer._draft_tokens = (99, 151645)
+    original_generate = model.model.generate
+    artifact = AudioArtifact(np.zeros(16000, dtype=np.float32), 16000)
+    method = getattr(recognizer, f"transcribe_{operation}") if operation != "transcribe" else recognizer.transcribe
+    assert method(artifact, ModelId.FAST) == "Actual speech."
+    assert len(model.calls) == 2
+    assert model.calls[0]["context"]
+    assert model.calls[1]["context"] == ""
+    assert recognizer.hotwords.entries == ("ADO", "Kusto", "PR", "AI")
+    assert model.model.generate == original_generate
+    assert "without hotword context" in caplog.text
+
+
+def test_hotword_generation_limit_recovery_discards_previous_draft(
+    tmp_path, monkeypatch, caplog,
+):
+    from vim2.draft import GpuGenerationLimitError
+
+    recognizer, loader, _ = _recognizer(tmp_path)
+    recognizer.load(ModelId.FAST)
+    recognizer._paths.hotwords_file.write_text("ADO\nKusto\nPR\nAI", encoding="utf-8")
+    recognizer.reload_hotwords()
+    model = loader.models[0]
+    drafts = []
+
+    class ContextLimitedDecoder(FakeDraftDecoder):
+        def generate(self):
+            drafts.append(self.draft)
+            if model.calls[-1]["context"]:
+                raise GpuGenerationLimitError([3] * 512)
+            return super().generate()
+
+    monkeypatch.setattr("vim2.draft.GpuDraftDecoder", ContextLimitedDecoder)
+    recognizer._draft_tokens = (99, 151645)
+    artifact = AudioArtifact(np.zeros(16000, dtype=np.float32), 16000)
+    assert recognizer.transcribe_preview(artifact, ModelId.FAST) == "recognized"
+    assert drafts == [(99, 151645), ()]
+    assert recognizer.debug_context()["draft_tokens"] == [1, 2, 151645]
+    assert recognizer.hotwords.entries == ("ADO", "Kusto", "PR", "AI")
+    assert "without hotword context" in caplog.text
+
+
+def test_hotword_recovery_failure_is_bounded_and_restores_generator(tmp_path, monkeypatch):
+    from vim2.draft import GpuGenerationLimitError
+
+    class LimitedDecoder(FakeDraftDecoder):
+        def generate(self):
+            raise GpuGenerationLimitError([3] * 512)
+
+    monkeypatch.setattr("vim2.draft.GpuDraftDecoder", LimitedDecoder)
+    recognizer, loader, _ = _recognizer(tmp_path)
+    recognizer.load(ModelId.FAST)
+    recognizer._paths.hotwords_file.write_text("ADO\nKusto\nPR\nAI", encoding="utf-8")
+    recognizer.reload_hotwords()
+    recognizer._draft_tokens = (99, 151645)
+    model = loader.models[0]
+    original_generate = model.model.generate
+    with pytest.raises(GpuGenerationLimitError):
+        recognizer.transcribe_final(
+            AudioArtifact(np.zeros(16000, dtype=np.float32), 16000), ModelId.FAST
+        )
+    assert len(model.calls) == 2
+    assert recognizer.debug_context()["draft_tokens"] == []
+    assert model.model.generate == original_generate
+
+
+def test_spoken_hotword_list_is_not_deleted_after_context_free_verification(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr("vim2.draft.GpuDraftDecoder", FakeDraftDecoder)
+    recognizer, loader, _ = _recognizer(tmp_path)
+    recognizer.load(ModelId.FAST)
+    recognizer._paths.hotwords_file.write_text("ADO\nKusto\nPR\nAI", encoding="utf-8")
+    recognizer.reload_hotwords()
+    loader.models[0].text = "ADO, Kusto, PR, AI."
+    assert recognizer.transcribe_final(
+        AudioArtifact(np.zeros(16000, dtype=np.float32), 16000), ModelId.FAST
+    ) == "ADO, Kusto, PR, AI."
+    assert len(loader.models[0].calls) == 2
+
+
+def test_hotword_recovery_cancellation_does_not_start_another_inference(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr("vim2.draft.GpuDraftDecoder", FakeDraftDecoder)
+    recognizer, loader, _ = _recognizer(tmp_path)
+    recognizer.load(ModelId.FAST)
+    recognizer._paths.hotwords_file.write_text("ADO\nKusto\nPR\nAI", encoding="utf-8")
+    recognizer.reload_hotwords()
+    model = loader.models[0]
+    event = threading.Event()
+    model.model.cancel_on_generate = event
+    model.text = "ADO, Kusto, PR, AI."
+    original_generate = model.model.generate
+    with pytest.raises(TranscriptionCancelled):
+        recognizer.transcribe(
+            AudioArtifact(np.zeros(16000, dtype=np.float32), 16000),
+            ModelId.FAST, cancel_event=event,
+        )
+    assert len(model.calls) == 1
+    assert model.model.generate == original_generate
+
+
 def test_draft_preview_final_and_hotwords_reset_use_same_model(tmp_path, monkeypatch):
     monkeypatch.setattr("vim2.draft.GpuDraftDecoder", FakeDraftDecoder)
     recognizer, loader, _ = _recognizer(tmp_path)
@@ -639,7 +813,7 @@ def test_gpu_transcribe_uses_newline_hotword_context(tmp_path: Path) -> None:
         AudioArtifact(np.zeros(1, dtype=np.float32), 16_000), ModelId.FAST
     )
 
-    assert loader.models[0].calls[0]["context"] == "Visual Studio Code\nVIM2"
+    assert loader.models[0].calls[0]["context"].endswith("Visual Studio Code, VIM2")
 
 
 def test_cpu_model_uses_comma_separated_hotwords(tmp_path: Path) -> None:
@@ -673,7 +847,7 @@ def test_reload_updates_gpu_context_without_reloading_weights(
 
     assert snapshot.entries == ("Qwen",)
     assert len(loader.models) == 1
-    assert loader.models[0].calls[0]["context"] == "Qwen"
+    assert loader.models[0].calls[0]["context"].endswith(": Qwen")
 
 
 def test_reload_rebuilds_loaded_cpu_recognizer(tmp_path: Path) -> None:

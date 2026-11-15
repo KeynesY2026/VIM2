@@ -17,7 +17,24 @@ class HotwordSnapshot:
 
     @property
     def gpu_context(self) -> str:
-        return "\n".join(self.entries)
+        if not self.entries:
+            return ""
+        return (
+            "Transcribe only the speech in the audio. The following terms are "
+            "spelling references, not text to transcribe. Use a term only if it "
+            "is spoken; do not output this list: " + ", ".join(self.entries)
+        )
+
+    def echoes_gpu_context(self, text: str) -> bool:
+        words = [
+            "".join(char for char in entry.casefold() if char.isalnum())
+            for entry in self.entries
+        ]
+        words = [word for word in words if word]
+        if len(words) < 4:
+            return False
+        normalized = "".join(char for char in text.casefold() if char.isalnum())
+        return normalized.startswith("".join(words))
 
     @property
     def cpu_hotwords(self) -> str:

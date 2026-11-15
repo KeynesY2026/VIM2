@@ -102,6 +102,7 @@ class AppController:
         self._cancel_requested = False
         self._operation_busy = False
         self._hotword_reload_pending = False
+        self._last_export_error: str | None = None
 
     @property
     def state(self) -> AppState:
@@ -110,6 +111,10 @@ class AppController:
     @property
     def selected_model(self) -> ModelId:
         return self._settings.selected_model
+
+    @property
+    def last_export_error(self) -> str | None:
+        return self._last_export_error
 
     def start(self) -> None:
         self._machine.transition_to(AppState.MODEL_LOADING)
@@ -292,18 +297,44 @@ class AppController:
             self._on_final_error,
         )
 
-    def export_failed_recording(self, destination: Path) -> bool:
+    def export_failed_recording(
+        self, destination: Path, *, audio_only: bool = False,
+    ) -> bool:
+        self._last_export_error = None
+        export_format = "WAV" if audio_only else "ZIP"
+        logger.info(
+            "Failure recording export requested: destination=%s format=%s "
+            "state=%s busy=%s",
+            destination, export_format, self.state.value, self._operation_busy,
+        )
         if self.state is not AppState.RETRY_PENDING or self._operation_busy:
-            self._view.show_error("当前没有可导出的失败录音。")
+            self._last_export_error = (
+                f"当前没有可导出的失败录音，或识别仍在进行。\n保存位置：{destination}"
+            )
+            logger.warning(
+                "Failure recording export rejected: destination=%s state=%s busy=%s",
+                destination, self.state.value, self._operation_busy,
+            )
+            self._view.show_error(self._last_export_error)
             return False
         try:
-            self._session.export_failed_recording(destination)
-        except (OSError, RuntimeError, ValueError, MemoryError) as exc:
-            logger.exception("Failed to export recognition failure case")
-            self._view.show_error(f"调试案例导出失败：{exc}")
+            self._session.export_failed_recording(destination, audio_only=audio_only)
+        except (OSError, RuntimeError, ValueError, TypeError, MemoryError) as exc:
+            logger.exception(
+                "Failed to export recognition failure case: destination=%s format=%s",
+                destination, export_format,
+            )
+            self._last_export_error = (
+                f"保存位置：{destination}\n{type(exc).__name__}: {exc}"
+            )
+            self._view.show_error(f"导出失败：{self._last_export_error}")
             return False
-        logger.info("Recognition failure case exported to %s", destination)
-        self._view.show_info(f"调试案例已保存：{destination}")
+        logger.info(
+            "Failure recording exported: destination=%s format=%s",
+            destination, export_format,
+        )
+        label = "原始录音" if audio_only else "调试案例"
+        self._view.show_info(f"{label}已保存：{destination}")
         return True
 
     def reload_hotwords(self) -> None:
